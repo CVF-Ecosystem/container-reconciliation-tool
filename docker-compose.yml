@@ -1,0 +1,162 @@
+# Docker Compose for Container Inventory Reconciliation Tool V5.4
+# Production-ready multi-service deployment
+
+version: '3.9'
+
+services:
+  # ==========================================================================
+  # API Service - Main REST API
+  # ==========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: reconciliation-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=sqlite:///./data/app.db
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data_input:/app/data_input:ro
+      - ./data_output:/app/data_output
+      - ./logs:/app/logs
+      - ./email_config.json:/app/email_config.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - reconciliation-network
+    depends_on:
+      - redis
+
+  # ==========================================================================
+  # Worker Service - Background task processing
+  # ==========================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: reconciliation-worker
+    restart: unless-stopped
+    command: python -m utils.scheduler
+    environment:
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data_input:/app/data_input:ro
+      - ./data_output:/app/data_output
+      - ./logs:/app/logs
+      - ./email_config.json:/app/email_config.json:ro
+    networks:
+      - reconciliation-network
+    depends_on:
+      - api
+      - redis
+
+  # ==========================================================================
+  # Dashboard Service - Streamlit BI Dashboard
+  # ==========================================================================
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: reconciliation-dashboard
+    restart: unless-stopped
+    command: streamlit run BI_Dashboard/bi_app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - APP_ENV=production
+    volumes:
+      - ./data_output:/app/data_output:ro
+      - ./logs:/app/logs
+    networks:
+      - reconciliation-network
+    depends_on:
+      - api
+
+  # ==========================================================================
+  # Redis - Cache and Message Queue
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: reconciliation-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - reconciliation-network
+
+  # ==========================================================================
+  # Nginx - Reverse Proxy (Production)
+  # ==========================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: reconciliation-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - reconciliation-network
+    depends_on:
+      - api
+      - dashboard
+    profiles:
+      - production
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  reconciliation-network:
+    driver: bridge
+    name: reconciliation-net
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  redis-data:
+    name: reconciliation-redis-data
+
+# =============================================================================
+# USAGE:
+# =============================================================================
+# Development:
+#   docker-compose up -d api dashboard
+#
+# Production with Nginx:
+#   docker-compose --profile production up -d
+#
+# Run tests:
+#   docker-compose run --rm api pytest tests/ -v
+#
+# View logs:
+#   docker-compose logs -f api
+#
+# Scale workers:
+#   docker-compose up -d --scale worker=3
+# =============================================================================

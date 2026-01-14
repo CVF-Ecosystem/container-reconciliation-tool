@@ -1,0 +1,211 @@
+{
+    "REQUIRED_COLUMNS_PER_FILE": {
+        "ton_cu": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Vị trí trên bãi",
+                "Vị trí",
+                "Location"
+            ],
+            [
+                "F/E",
+                "FE"
+            ]
+        ],
+        "ton_moi": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Vị trí trên bãi",
+                "Vị trí",
+                "Location"
+            ],
+            [
+                "F/E",
+                "FE"
+            ]
+        ],
+        "gate_in": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Xe vào cổng"
+            ]
+        ],
+        "gate_out": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Xe ra cổng"
+            ]
+        ],
+        "xuat_tau": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Phương án",
+                "Phương án ra",
+                "Hướng"
+            ],
+            [
+                "Ngày ra bãi"
+            ]
+        ],
+        "nhap_tau": [
+            [
+                "Số Container",
+                "Container"
+            ],
+            [
+                "Hãng khai thác",
+                "Hãng KT",
+                "Operator"
+            ],
+            [
+                "Phương án",
+                "Phương án ra",
+                "Hướng"
+            ],
+            [
+                "Ngày nhập bãi"
+            ]
+        ]
+    },
+    "OPERATOR_MAPPING": {
+        "VIMC Lines": [
+            "VMC",
+            "SVM",
+            "VLC"
+        ],
+        "Vinafco": [
+            "VFC",
+            "SVF"
+        ],
+        "Vosco": [
+            "VOC",
+            "SVC"
+        ],
+        "Van Son": [
+            "VSS",
+            "SVS"
+        ],
+        "Vinaline": [
+            "VNL"
+        ],
+        "Hang Khac": [
+            "TLA"
+        ]
+    },
+    "HANG_TAU_TIME_CONFIG": {
+        "_comment": "Config thời gian biến động theo yêu cầu từng hãng tàu",
+        "VMC": {
+            "mode": "split",
+            "description": "VMC chia theo ca: sáng (15h hôm trước - 8h), chiều (8h - 15h)",
+            "ca_sang": {
+                "from": "15:00",
+                "to": "08:00",
+                "cross_day": true
+            },
+            "ca_chieu": {
+                "from": "08:00",
+                "to": "15:00",
+                "cross_day": false
+            }
+        },
+        "SVM": {
+            "mode": "split",
+            "description": "SVM (SOC của VMC) - theo ca như VMC",
+            "ca_sang": {
+                "from": "15:00",
+                "to": "08:00",
+                "cross_day": true
+            },
+            "ca_chieu": {
+                "from": "08:00",
+                "to": "15:00",
+                "cross_day": false
+            }
+        },
+        "VOC": {
+            "mode": "full_day",
+            "description": "VOSCO lấy nguyên ngày (8h - 8h)",
+            "time_range": {
+                "from": "08:00",
+                "to": "08:00",
+                "cross_day": true
+            }
+        },
+        "SVC": {
+            "mode": "full_day",
+            "description": "SVC (SOC của VOSCO) - nguyên ngày",
+            "time_range": {
+                "from": "08:00",
+                "to": "08:00",
+                "cross_day": true
+            }
+        },
+        "VFC": {
+            "mode": "full_day",
+            "description": "VINAFCO lấy nguyên ngày (8h - 8h)",
+            "time_range": {
+                "from": "08:00",
+                "to": "08:00",
+                "cross_day": true
+            }
+        },
+        "SVF": {
+            "mode": "full_day",
+            "description": "SVF (SOC của Vinafco) - nguyên ngày",
+            "time_range": {
+                "from": "08:00",
+                "to": "08:00",
+                "cross_day": true
+            }
+        },
+        "DEFAULT": {
+            "mode": "full_day",
+            "description": "Mặc định: nguyên ngày (8h - 8h)",
+            "time_range": {
+                "from": "08:00",
+                "to": "08:00",
+                "cross_day": true
+            }
+        }
+    }
+}

@@ -1,0 +1,16 @@
+# === CORE ===
+pandas>=2.0.0
+openpyxl>=3.1.0
+XlsxWriter>=3.1.0
+
+# === GUI ===
+ttkbootstrap>=1.10.0
+tkcalendar>=1.6.0
+
+# === WEB DASHBOARD ===
+streamlit>=1.30.0
+plotly>=5.15.0
+
+# === OPTIONAL (for specific features) ===
+# schedule>=1.2.0      # V5.0: Task scheduler (auto-installed with app)
+# pystray>=0.19.0      # Future: System tray (not yet implemented)

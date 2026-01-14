@@ -1,0 +1,404 @@
+# Kubernetes Deployment Configuration
+# Container Inventory Reconciliation Tool V5.4
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reconciliation
+  labels:
+    app: reconciliation
+    environment: production
+
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reconciliation-config
+  namespace: reconciliation
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  API_PORT: "8000"
+  DASHBOARD_PORT: "8501"
+
+---
+# Secret for sensitive data
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reconciliation-secrets
+  namespace: reconciliation
+type: Opaque
+stringData:
+  JWT_SECRET_KEY: "your-super-secret-key-change-in-production"
+  SMTP_PASSWORD: ""
+  DATABASE_URL: "sqlite:///./data/app.db"
+
+---
+# PersistentVolumeClaim for data storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reconciliation-data-pvc
+  namespace: reconciliation
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# PersistentVolumeClaim for logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reconciliation-logs-pvc
+  namespace: reconciliation
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reconciliation-api
+  namespace: reconciliation
+  labels:
+    app: reconciliation
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: reconciliation
+      component: api
+  template:
+    metadata:
+      labels:
+        app: reconciliation
+        component: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/your-org/reconciliation:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: reconciliation-config
+            - secretRef:
+                name: reconciliation-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data_input
+              subPath: data_input
+            - name: data
+              mountPath: /app/data_output
+              subPath: data_output
+            - name: logs
+              mountPath: /app/logs
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: reconciliation-data-pvc
+        - name: logs
+          persistentVolumeClaim:
+            claimName: reconciliation-logs-pvc
+
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: reconciliation-api
+  namespace: reconciliation
+  labels:
+    app: reconciliation
+    component: api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: reconciliation
+    component: api
+
+---
+# Dashboard Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reconciliation-dashboard
+  namespace: reconciliation
+  labels:
+    app: reconciliation
+    component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reconciliation
+      component: dashboard
+  template:
+    metadata:
+      labels:
+        app: reconciliation
+        component: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/your-org/reconciliation:latest
+          imagePullPolicy: Always
+          command: ["streamlit", "run", "BI_Dashboard/bi_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+          ports:
+            - containerPort: 8501
+              name: http
+          envFrom:
+            - configMapRef:
+                name: reconciliation-config
+          volumeMounts:
+            - name: data
+              mountPath: /app/data_output
+              subPath: data_output
+              readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "300m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: reconciliation-data-pvc
+
+---
+# Dashboard Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: reconciliation-dashboard
+  namespace: reconciliation
+  labels:
+    app: reconciliation
+    component: dashboard
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8501
+      targetPort: 8501
+      protocol: TCP
+      name: http
+  selector:
+    app: reconciliation
+    component: dashboard
+
+---
+# Worker Deployment (Background tasks)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reconciliation-worker
+  namespace: reconciliation
+  labels:
+    app: reconciliation
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reconciliation
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: reconciliation
+        component: worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/reconciliation:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "utils.scheduler"]
+          envFrom:
+            - configMapRef:
+                name: reconciliation-config
+            - secretRef:
+                name: reconciliation-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data_input
+              subPath: data_input
+            - name: data
+              mountPath: /app/data_output
+              subPath: data_output
+            - name: logs
+              mountPath: /app/logs
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: reconciliation-data-pvc
+        - name: logs
+          persistentVolumeClaim:
+            claimName: reconciliation-logs-pvc
+
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reconciliation-ingress
+  namespace: reconciliation
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  tls:
+    - hosts:
+        - reconciliation.example.com
+      secretName: reconciliation-tls
+  rules:
+    - host: reconciliation.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: reconciliation-api
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reconciliation-dashboard
+                port:
+                  number: 8501
+
+---
+# HorizontalPodAutoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reconciliation-api-hpa
+  namespace: reconciliation
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reconciliation-api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# NetworkPolicy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: reconciliation-network-policy
+  namespace: reconciliation
+spec:
+  podSelector:
+    matchLabels:
+      app: reconciliation
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8501
+    - from:
+        - podSelector:
+            matchLabels:
+              app: reconciliation
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: reconciliation
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 587  # SMTP
