@@ -85,3 +85,13 @@ coverage.xml
 !data_input/.gitkeep
 !data_output/.gitkeep
 !logs/.gitkeep
+
+# Config files - user specific
+email_config.json
+config_mappings.json
+data/tenants.json
+
+# QA/Internal docs
+QA_*.md
+EVALUATION_*.md
+BUILD_GUIDE.md
