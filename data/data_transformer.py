@@ -1,9 +1,9 @@
-# File: data_transformer.py
+# File: data_transformer.py — @2026 v1.0
 import pandas as pd
 import logging
 import re
 from unidecode import unidecode
-from config import Col, TIME_PRIORITY_COLS, BUSINESS_RULES
+from config import Col, TIME_PRIORITY_COLS, BUSINESS_RULES, DEFAULT_FALLBACK_DATE
 
 def normalize_vietnamese_text(series: pd.Series) -> pd.Series:
     """Chuẩn hóa text: bỏ dấu, chuyển sang in hoa, loại bỏ khoảng trắng thừa."""
@@ -25,12 +25,16 @@ def standardize_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def assign_transaction_time(df: pd.DataFrame) -> pd.DataFrame:
-    """Xác định ThoiDiemGiaoDich chính dựa trên các cột ưu tiên."""
+    """Xác định ThoiDiemGiaoDich chính dựa trên các cột ưu tiên.
+    
+    Fallback về DEFAULT_FALLBACK_DATE (1970-01-01) khi không tìm thấy ngày hợp lệ.
+    Các record có ngày 1970-01-01 cần được xem xét kỹ khi phân tích.
+    """
     df[Col.TRANSACTION_TIME] = pd.NaT
     for col in TIME_PRIORITY_COLS:
         if col in df.columns:
             df[Col.TRANSACTION_TIME] = df[Col.TRANSACTION_TIME].fillna(df[col])
-    df[Col.TRANSACTION_TIME] = df[Col.TRANSACTION_TIME].fillna(pd.to_datetime('1970-01-01'))
+    df[Col.TRANSACTION_TIME] = df[Col.TRANSACTION_TIME].fillna(pd.to_datetime(DEFAULT_FALLBACK_DATE))
     return df
 
 def apply_business_rules(df: pd.DataFrame) -> pd.DataFrame:

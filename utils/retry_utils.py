@@ -1,5 +1,5 @@
 # File: utils/retry_utils.py
-# V5.4: Retry mechanism for file operations and network calls
+# @2026 v1.0: Retry mechanism for file operations and network calls
 """
 Retry utilities for handling transient failures.
 

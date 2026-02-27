@@ -1,11 +1,14 @@
+# File: config.py — @2026 v1.0
+"""Application configuration: paths, column definitions, business rules, email settings."""
 import os
 import sys
 import configparser
 from pathlib import Path
 
 # --- APP INFO ---
-APP_VERSION = "5.7"
+APP_VERSION = "1.0"
 APP_YEAR = "2026"
+APP_COPYRIGHT = "@2026"
 
 # --- PATHS ---
 # Detect if running as EXE or Python script
@@ -91,14 +94,11 @@ DATA_VALIDATION_RULES = {
 }
 
 # --- FILE IDENTIFICATION ---
-# V4.5.3: Sửa thứ tự và pattern để tránh xung đột
-# V5.7: Thêm pattern cụ thể hơn để tránh match nhầm
 # Lưu ý: Pattern được check theo thứ tự trong identify_file_type()
 FILE_PATTERNS = {
     # File chung (sẽ được tách bởi data loader)
     "nhapxuat_combined": ["NHAPXUAT", "NHAP XUAT", "NHẬP XUẤT"],  # File chứa cả nhập và xuất tàu
-    "gate_combined": ["GATE IN OUT", "GATE VAO RA", "GATE.XLS"],  # V5.7: Pattern cụ thể hơn để tránh match GATE IN/OUT riêng lẻ
-    # V5.7: RESTOW là tên khác của SHIFTING (Tàu-Bãi-Tàu)
+    "gate_combined": ["GATE IN OUT", "GATE VAO RA", "GATE.XLS"],
     "shifting_combined": ["SHIFTING", "RESTOW.XLS"],   # SHIFTING.xlsx hoặc RESTOW.xlsx
     # File riêng lẻ
     "ton_cu": ["TON CU", "TON CŨ", "BASELINE"],
@@ -119,52 +119,8 @@ TIME_PRIORITY_COLS = [
 ]
 
 # Dành cho Logic Chính (Rule Engine)
-# Cập nhật V4.5.2: Mở rộng thuật ngữ - hỗ trợ cả tiếng Anh và tiếng Việt
-BUSINESS_RULES = [
-    # Theo Source Key - Ưu tiên cao nhất
-    {'conditions': {Col.SOURCE_KEY: ['xuat_tau', 'xuat_shifting', 'gate_out']}, 'action': {'move_type': 'OUT'}},
-    {'conditions': {Col.SOURCE_KEY: ['nhap_tau', 'nhap_shifting', 'gate_in', 'ton_cu']}, 'action': {'move_type': 'IN'}},
-    
-    # ===== PHƯƠNG ÁN XUẤT (RA khỏi bãi) =====
-    # Lấy Nguyên - nhiều cách viết
-    {'conditions': {Col.PHUONG_AN: ['LAY NGUYEN', 'Lấy Nguyên', 'LẤY NGUYÊN', 'lay nguyen', 'PICK UP', 'Pick Up', 'Pick up']}, 'action': {'move_type': 'OUT'}},
-    # Cấp Rỗng - nhiều cách viết  
-    {'conditions': {Col.PHUONG_AN: ['CAP RONG', 'Cấp rỗng', 'CẤP RỖNG', 'cap rong', 'EMPTY RELEASE', 'Empty Release']}, 'action': {'move_type': 'OUT'}},
-    # Lưu Rỗng (xuất)
-    {'conditions': {Col.PHUONG_AN: ['LUU RONG', 'Lưu rỗng', 'LƯU RỖNG', 'luu rong'], Col.VAO_RA: ['RA', 'Ra', 'OUT', 'Out']}, 'action': {'move_type': 'OUT'}},
-    # Xuất tàu
-    {'conditions': {Col.PHUONG_AN: ['XUAT TAU', 'Xuất tàu', 'XUẤT TÀU', 'xuat tau', 'LOADING', 'Loading', 'SHIP OUT', 'Ship Out']}, 'action': {'move_type': 'OUT'}},
-    # Chuyển tàu (xuất)
-    {'conditions': {Col.PHUONG_AN: ['CHUYEN TAU', 'Chuyển tàu', 'CHUYỂN TÀU', 'chuyen tau', 'TRANSHIPMENT', 'Transhipment'], Col.VAO_RA: ['RA', 'Ra', 'OUT', 'Out']}, 'action': {'move_type': 'OUT'}},
-    # Shifting Loading (Bãi → Tàu)
-    {'conditions': {Col.PHUONG_AN: ['SHIFTING LOADING', 'Shifting Loading', 'shifting loading', 'SHIFTING XUẤT', 'Shifting xuất', 'X-RESTOW', 'RESTOW OUT', 'Shifting xuất (Bãi→Tàu)']}, 'action': {'move_type': 'OUT'}},
-    
-    # ===== PHƯƠNG ÁN NHẬP (VÀO bãi) =====
-    # Hạ Bãi - nhiều cách viết
-    {'conditions': {Col.PHUONG_AN: ['HA BAI', 'Hạ bãi', 'HẠ BÃI', 'ha bai', 'DROP OFF', 'Drop Off', 'Drop off', 'DROP']}, 'action': {'move_type': 'IN'}},
-    # Trả Rỗng - nhiều cách viết
-    {'conditions': {Col.PHUONG_AN: ['TRA RONG', 'Trả rỗng', 'TRẢ RỖNG', 'tra rong', 'EMPTY RETURN', 'Empty Return', 'MTY RETURN']}, 'action': {'move_type': 'IN'}},
-    # Lưu Rỗng (nhập)
-    {'conditions': {Col.PHUONG_AN: ['LUU RONG', 'Lưu rỗng', 'LƯU RỖNG', 'luu rong'], Col.VAO_RA: ['VAO', 'VÀO', 'Vào', 'IN', 'In']}, 'action': {'move_type': 'IN'}},
-    # Nhập tàu
-    {'conditions': {Col.PHUONG_AN: ['NHAP TAU', 'Nhập tàu', 'NHẬP TÀU', 'nhap tau', 'DISCHARGE', 'Discharge', 'SHIP IN', 'Ship In']}, 'action': {'move_type': 'IN'}},
-    # Chuyển tàu (nhập)
-    {'conditions': {Col.PHUONG_AN: ['CHUYEN TAU', 'Chuyển tàu', 'CHUYỂN TÀU', 'chuyen tau', 'TRANSHIPMENT', 'Transhipment'], Col.VAO_RA: ['VAO', 'VÀO', 'Vào', 'IN', 'In']}, 'action': {'move_type': 'IN'}},
-    # Shifting Discharge (Tàu → Bãi)
-    {'conditions': {Col.PHUONG_AN: ['SHIFTING DISCHARGE', 'Shifting Discharge', 'shifting discharge', 'SHIFTING NHẬP', 'Shifting nhập', 'N-RESTOW', 'RESTOW IN', 'Shifting nhập (Tàu→Bãi)']}, 'action': {'move_type': 'IN'}},
-    
-    # ===== ĐÓNG HÀNG / RÚT HÀNG (phụ thuộc Vào/Ra) =====
-    {'conditions': {Col.PHUONG_AN: ['DONG HANG', 'RUT HANG', 'ĐÓNG HÀNG', 'RÚT HÀNG', 'ĐÓNG HÀNG XE - CONT', 'ĐÓNG HÀNG GHE - CONT', 'STUFFING', 'Stuffing', 'UNSTUFFING', 'Unstuffing'], Col.VAO_RA: ['RA', 'Ra', 'OUT', 'Out']}, 'action': {'move_type': 'OUT'}},
-    {'conditions': {Col.PHUONG_AN: ['DONG HANG', 'RUT HANG', 'ĐÓNG HÀNG', 'RÚT HÀNG', 'ĐÓNG HÀNG XE - CONT', 'ĐÓNG HÀNG GHE - CONT', 'STUFFING', 'Stuffing', 'UNSTUFFING', 'Unstuffing'], Col.VAO_RA: ['VAO', 'VÀO', 'Vào', 'IN', 'In']}, 'action': {'move_type': 'IN'}},
-    
-    # ===== RÚT HÀNG TỪ XE / GHE (phụ thuộc Vào/Ra) =====
-    {'conditions': {Col.PHUONG_AN: ['RÚT HÀNG TỪ XE - CONT', 'RÚT HÀNG TỪ GHE - CONT', 'RUT HANG TU XE', 'RUT HANG TU GHE'], Col.VAO_RA: ['RA', 'Ra', 'OUT', 'Out']}, 'action': {'move_type': 'OUT'}},
-    {'conditions': {Col.PHUONG_AN: ['RÚT HÀNG TỪ XE - CONT', 'RÚT HÀNG TỪ GHE - CONT', 'RUT HANG TU XE', 'RUT HANG TU GHE'], Col.VAO_RA: ['VAO', 'VÀO', 'Vào', 'IN', 'In']}, 'action': {'move_type': 'IN'}},
-    
-    # ===== ĐÓNG HÀNG SANG CONTAINER (CFS) =====
-    {'conditions': {Col.PHUONG_AN: ['Đóng hàng sang container sử dụng xe nâng', 'DONG HANG SANG CONT', 'CFS STUFFING'], Col.VAO_RA: ['RA', 'Ra', 'OUT', 'Out']}, 'action': {'move_type': 'OUT'}},
-    {'conditions': {Col.PHUONG_AN: ['Đóng hàng sang container sử dụng xe nâng', 'DONG HANG SANG CONT', 'CFS STUFFING'], Col.VAO_RA: ['VAO', 'VÀO', 'Vào', 'IN', 'In']}, 'action': {'move_type': 'IN'}},
-]
+# Business rules được tách ra file riêng config_business_rules.py để dễ bảo trì
+from config_business_rules import BUSINESS_RULES  # noqa: F401 (re-export)
 
 # Dành cho Logic Đơn giản (Checker)
 INBOUND_KEYS = ["ton_cu", "gate_in", "nhap_tau", "nhap_shifting"]
@@ -179,8 +135,6 @@ SHIFTING_RULES = {
 }
 
 COMPARE_COLS_FOR_MISMATCH = [   
-    # V4.7.1: Bỏ Col.OPERATOR vì file giao dịch không có cột Hãng, gây sai thông tin giả
-    # V4.7.2: Tạm vô hiệu hóa Col.JOB_ORDER - khách đăng ký trước nhưng chưa đến lấy = bình thường
     # Col.JOB_ORDER,  # TODO: Bật lại sau khi test data nhiều ngày
     Col.FE, Col.ISO, Col.LOCATION
 ]
@@ -188,6 +142,15 @@ COMPARE_COLS_FOR_MISMATCH = [
 # --- DATE FILTERING ---
 START_DATE = None
 END_DATE = None
+
+# --- CONSTANTS ---
+# Fallback date dùng khi không tìm thấy ngày giao dịch hợp lệ trong dữ liệu.
+# Dùng epoch (1970-01-01) để dễ nhận biết và lọc ra khi cần.
+DEFAULT_FALLBACK_DATE = "1970-01-01"
+
+# Hệ số TEU mặc định khi không có thông tin kích thước container.
+# 1 TEU = 20ft, 2 TEU = 40ft/45ft. Hệ số 1.5 là ước tính trung bình.
+DEFAULT_TEU_FACTOR = 1.5
 # --- CONSTANTS FOR DICTIONARY KEYS ---
 class ResultKeys:
     KHOP = "khop"
@@ -205,7 +168,8 @@ class MainResultKeys:
     KHOP_SAI_INFO = "khop_sai_info"
 
 # --- EMAIL NOTIFICATION CONFIGURATION ---
-# Load settings from gui_settings.ini (Legacy/User Config) or use Env Vars
+# Ưu tiên đọc từ Environment Variables (an toàn hơn INI file)
+# INI file chỉ dùng làm fallback cho các setting không nhạy cảm (smtp_server, port, v.v.)
 ini_path = BASE_DIR / "gui_settings.ini"
 email_config = {}
 if ini_path.exists():
@@ -214,15 +178,24 @@ if ini_path.exists():
         parser.read(ini_path)
         if "Email" in parser:
             email_config = parser["Email"]
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"Could not read email config from INI: {e}")
+
+# Password: ưu tiên env var, KHÔNG đọc từ INI file để tránh lưu plaintext
+_email_password_from_ini = email_config.get("sender_password", "")
+_email_password = os.getenv("APP_EMAIL_PASSWORD") or _email_password_from_ini
+if _email_password_from_ini and not os.getenv("APP_EMAIL_PASSWORD"):
+    logging.warning(
+        "[SECURITY] Email password found in gui_settings.ini (plaintext). "
+        "Please migrate to APP_EMAIL_PASSWORD environment variable instead."
+    )
 
 EMAIL_SETTINGS = {
     "enabled": email_config.get("enabled", "False") == "True",
     "smtp_server": email_config.get("smtp_server", "smtp.gmail.com"),
     "smtp_port": int(email_config.get("smtp_port", "587")),
-    "sender_email": email_config.get("sender_email") or os.getenv("APP_EMAIL_USER", "your_email@gmail.com"),
-    "sender_password": email_config.get("sender_password") or os.getenv("APP_EMAIL_PASSWORD", "your_app_password"),
+    "sender_email": os.getenv("APP_EMAIL_USER") or email_config.get("sender_email", "your_email@gmail.com"),
+    "sender_password": _email_password or "your_app_password",
     "recipients": email_config.get("recipients", "recipient1@example.com").split(",") if "recipients" in email_config else ["recipient1@example.com"],
     "subject_prefix": "[BÁO CÁO ĐỐI SOÁT TỰ ĐỘNG]"
 }

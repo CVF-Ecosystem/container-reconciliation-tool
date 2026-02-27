@@ -1,5 +1,5 @@
 # File: utils/audit_trail.py
-# V5.4: Audit trail module for tracking all important operations
+# @2026 v1.0: Audit trail module for tracking all important operations
 """
 Audit Trail System for Container Inventory Reconciliation Tool.
 

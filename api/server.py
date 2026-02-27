@@ -1,5 +1,5 @@
 # File: api/server.py
-# V5.4 Phase 2: REST API Server for Container Inventory Reconciliation
+# @2026 v1.0: REST API Server for Container Inventory Reconciliation
 """
 REST API Server using FastAPI.
 
@@ -13,6 +13,8 @@ Run with: uvicorn api.server:app --reload --port 8000
 """
 
 import logging
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -101,13 +103,17 @@ if FASTAPI_AVAILABLE:
         redoc_url="/redoc"
     )
     
-    # CORS middleware
+    # CORS middleware — đọc từ env var ALLOWED_ORIGINS (comma-separated)
+    # Mặc định chỉ cho phép localhost để tránh lỗ hổng bảo mật
+    _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8501,http://localhost:3000")
+    _allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     )
     
     # Global state
@@ -173,45 +179,82 @@ if FASTAPI_AVAILABLE:
         background_tasks: BackgroundTasks
     ):
         """
-        Run container inventory reconciliation.
+        Submit a container inventory reconciliation job (async).
         
-        This endpoint triggers a reconciliation process for the specified date.
-        The process runs in the background and generates reports.
+        Returns immediately with a task_id. Use GET /tasks/{task_id} to check status.
         """
         global _last_reconciliation
         
         try:
-            import time
-            start_time = time.perf_counter()
-            
-            # Import core logic
-            from core_logic import run_reconciliation as core_reconcile
             from config import INPUT_DIR, OUTPUT_DIR
+            from utils.task_queue import get_task_queue
             
-            # Run reconciliation
-            result = core_reconcile(
-                date_str=request.date,
-                time_slot=request.time_slot,
-                include_cfs=request.include_cfs
+            task_queue = get_task_queue()
+            task_id = task_queue.submit_reconciliation(
+                input_dir=INPUT_DIR,
+                output_dir=OUTPUT_DIR
             )
             
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
             _last_reconciliation = datetime.now()
             
             return ReconciliationResponse(
                 success=True,
-                message="Reconciliation completed successfully",
+                message=f"Reconciliation job submitted. Track with GET /tasks/{task_id}",
                 date=request.date,
-                summary=result.get('summary') if result else None,
-                report_path=result.get('report_path') if result else None,
-                elapsed_ms=elapsed_ms
+                summary={"task_id": task_id},
+                report_path=None,
+                elapsed_ms=0
             )
             
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=f"Data files not found: {e}")
         except Exception as e:
-            logging.error(f"Reconciliation failed: {e}")
+            logging.error(f"Reconciliation submission failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+    
+    
+    @app.get("/tasks/{task_id}", tags=["Reconciliation"])
+    async def get_task_status(task_id: str):
+        """
+        Get status of a submitted reconciliation task.
+        
+        Returns task status, progress (0-100), and result when complete.
+        """
+        from utils.task_queue import get_task_queue
+        
+        task_queue = get_task_queue()
+        task = task_queue.get_task_status(task_id)
+        
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        return task.to_dict()
+    
+    
+    @app.get("/tasks", tags=["Reconciliation"])
+    async def list_tasks(limit: int = Query(20, ge=1, le=100)):
+        """List recent reconciliation tasks."""
+        from utils.task_queue import get_task_queue
+        
+        task_queue = get_task_queue()
+        return {"tasks": task_queue.list_tasks(limit=limit)}
+    
+    
+    @app.delete("/tasks/{task_id}", tags=["Reconciliation"])
+    async def cancel_task(task_id: str):
+        """Cancel a pending reconciliation task."""
+        from utils.task_queue import get_task_queue
+        
+        task_queue = get_task_queue()
+        cancelled = task_queue.cancel_task(task_id)
+        
+        if not cancelled:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Task {task_id} cannot be cancelled (not found or already running)"
+            )
+        
+        return {"message": f"Task {task_id} cancelled"}
     
     @app.post("/compare", response_model=CompareResponse, tags=["Reconciliation"])
     async def compare_files(request: CompareRequest):
@@ -320,11 +363,26 @@ if FASTAPI_AVAILABLE:
     
     @app.get("/files/download/{file_path:path}", tags=["Files"])
     async def download_file(file_path: str):
-        """Download a report file."""
-        path = Path(file_path)
+        """Download a report file (chỉ cho phép tải file trong OUTPUT_DIR)."""
+        from config import OUTPUT_DIR
+        
+        path = Path(file_path).resolve()
+        allowed_base = Path(OUTPUT_DIR).resolve()
+        
+        # Bảo vệ path traversal: chỉ cho phép file trong OUTPUT_DIR
+        try:
+            path.relative_to(allowed_base)
+        except ValueError:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: file must be within the output directory"
+            )
         
         if not path.exists():
             raise HTTPException(status_code=404, detail="File not found")
+        
+        if not path.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
         
         return FileResponse(
             path=str(path),
@@ -343,25 +401,35 @@ if FASTAPI_AVAILABLE:
         Supports formats: excel, pdf, json
         """
         try:
-            from reports.report_generator import ReportGenerator
+            from core_logic import load_results
+            from reports.report_generator import create_reports
             from config import OUTPUT_DIR
             
-            generator = ReportGenerator()
+            # Tải kết quả đã lưu
+            results = load_results(Path(OUTPUT_DIR))
+            if not results:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No reconciliation results found. Run /reconcile first."
+                )
             
             output_path = Path(OUTPUT_DIR) / f"Report_{request.date.replace('.', '')}"
             output_path.mkdir(parents=True, exist_ok=True)
             
             if request.format == "excel":
-                report_path = generator.generate_excel(
-                    date=request.date,
-                    output_dir=output_path,
-                    operators=request.operators
-                )
+                # Cập nhật report_folder trong results và tạo báo cáo
+                results["report_folder"] = output_path
+                create_reports(results)
+                report_path = output_path
             elif request.format == "json":
-                report_path = generator.generate_json(
-                    date=request.date,
-                    output_dir=output_path
-                )
+                import json
+                summary_df = results.get("summary_df")
+                if summary_df is not None:
+                    json_path = output_path / "summary.json"
+                    summary_df.to_json(json_path, orient="records", force_ascii=False, indent=2)
+                    report_path = json_path
+                else:
+                    report_path = None
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
             
@@ -371,6 +439,8 @@ if FASTAPI_AVAILABLE:
                 "path": str(report_path) if report_path else None
             }
             
+        except HTTPException:
+            raise
         except Exception as e:
             logging.error(f"Report generation failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))

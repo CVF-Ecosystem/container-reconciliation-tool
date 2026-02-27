@@ -1,5 +1,5 @@
 # File: utils/file_comparator.py
-# V5.4: Công cụ so sánh 2 file Excel để đối chiếu dữ liệu
+# @2026 v1.0: Công cụ so sánh 2 file Excel để đối chiếu dữ liệu
 """
 So sánh file BIEN DONG/TON BAI từ ứng dụng với file từ TOS Cảng.
 Mục đích: Xác nhận 2 file khớp 100% hay có sai lệch.

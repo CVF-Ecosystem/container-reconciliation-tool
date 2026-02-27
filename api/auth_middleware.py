@@ -74,12 +74,10 @@ if FASTAPI_AVAILABLE:
             if user:
                 return user
         
-        # Try API key
+        # Try API key — dùng verify_api_key() thay vì username lookup
         if api_key:
-            # API keys are in format: user_id.secret
-            # For simplicity, we use username as API key
-            user = auth_manager.user_store.get_user_by_username(api_key)
-            if user and user.is_active and user.role == Role.API:
+            user = auth_manager.user_store.verify_api_key(api_key)
+            if user:
                 return user
         
         raise AuthenticationError("Invalid or expired token")

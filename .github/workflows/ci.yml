@@ -1,0 +1,221 @@
+# .github/workflows/ci.yml — @2026 v1.0
+# CI/CD Pipeline for Container Inventory Reconciliation Tool
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ============ LINT & TYPE CHECK ============
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install lint dependencies
+        run: |
+          pip install ruff mypy
+      
+      - name: Run Ruff linter
+        run: |
+          ruff check . --output-format=github
+        continue-on-error: true  # Don't fail on lint warnings
+      
+      - name: Run type checking (mypy)
+        run: |
+          mypy . --ignore-missing-imports --no-strict-optional \
+            --exclude "tests/" --exclude "gui/" --exclude "BI_Dashboard/"
+        continue-on-error: true
+
+  # ============ SECURITY SCAN ============
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install security tools
+        run: |
+          pip install bandit safety
+      
+      - name: Run Bandit security scan
+        run: |
+          bandit -r . -ll \
+            --exclude ./tests,./gui,./BI_Dashboard \
+            -f json -o bandit-report.json || true
+          bandit -r . -ll \
+            --exclude ./tests,./gui,./BI_Dashboard
+        continue-on-error: true
+      
+      - name: Check for known vulnerabilities
+        run: |
+          pip install -r requirements.txt --dry-run 2>/dev/null || true
+          safety check --full-report || true
+        continue-on-error: true
+      
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-report
+          path: bandit-report.json
+
+  # ============ UNIT TESTS ============
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pandas openpyxl XlsxWriter unidecode
+          pip install pytest pytest-cov pytest-xdist
+          # Optional deps for testing
+          pip install PyJWT bcrypt || true
+      
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --tb=short \
+            -q \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-omit="tests/*,gui/*,BI_Dashboard/*" \
+            -x \
+            --ignore=tests/test_api_server.py \
+            -n auto
+        env:
+          ADMIN_DEFAULT_PASSWORD: test_admin_password_ci
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+      
+      - name: Coverage threshold check
+        run: |
+          coverage report --fail-under=60 || echo "Coverage below 60%, please add tests"
+        continue-on-error: true
+
+  # ============ INTEGRATION TESTS ============
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas openpyxl XlsxWriter unidecode pytest
+      
+      - name: Run integration tests
+        run: |
+          pytest tests/test_integration.py tests/test_reconciliation_engine.py \
+            --tb=short -v
+        env:
+          ADMIN_DEFAULT_PASSWORD: test_admin_password_ci
+        continue-on-error: true
+
+  # ============ BUILD CHECK ============
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas openpyxl XlsxWriter unidecode
+      
+      - name: Verify imports work
+        run: |
+          python -c "import config; print(f'Config loaded: v{config.APP_VERSION}')"
+          python -c "from core_logic import run_full_reconciliation_process; print('core_logic OK')"
+          python -c "from core.pipeline import ReconciliationPipeline; print('pipeline OK')"
+          python -c "from utils.secrets import SecretsManager; print('secrets OK')"
+          python -c "from utils.task_queue import InMemoryTaskQueue; print('task_queue OK')"
+      
+      - name: Check for syntax errors
+        run: |
+          find . -name "*.py" \
+            -not -path "./gui/*" \
+            -not -path "./BI_Dashboard/*" \
+            -not -path "./.git/*" \
+            | xargs python -m py_compile
+          echo "All Python files compile successfully"
+
+  # ============ DOCKER BUILD ============
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: container-reconciliation:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

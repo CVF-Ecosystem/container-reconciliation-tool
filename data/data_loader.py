@@ -1,4 +1,5 @@
-# File: data_loader.py
+# File: data_loader.py — @2026 v1.0
+import time
 import pandas as pd
 from pathlib import Path
 import logging
@@ -6,7 +7,7 @@ from typing import Dict, Optional
 from config import Col
 from utils.exceptions import DataLoadError, ValidationError, MissingColumnError
 from data.data_transformer import (
-    clean_column_names, 
+    clean_column_names,
     standardize_datetime_columns,
     assign_transaction_time,
     apply_business_rules,
@@ -30,8 +31,6 @@ def load_and_transform_one_file(file_path: Path, file_name: str, file_key: str, 
     """
     logging.info(f"Đang xử lý file: {file_name} (key: {file_key})...")
     
-    # V5.0: Retry mechanism
-    import time
     last_error = None
     
     for attempt in range(1, max_retries + 1):
@@ -46,7 +45,7 @@ def load_and_transform_one_file(file_path: Path, file_name: str, file_key: str, 
             if attempt < max_retries:
                 wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
                 logging.warning(f"[Retry {attempt}/{max_retries}] File đang bị lock: {file_name}. Đợi {wait_time}s...")
-                time.sleep(wait_time)
+                time.sleep(wait_time)  # time đã import ở đầu file
             else:
                 logging.error(f"Không có quyền truy cập file sau {max_retries} lần thử: {file_name}")
                 return pd.DataFrame()
@@ -55,7 +54,7 @@ def load_and_transform_one_file(file_path: Path, file_name: str, file_key: str, 
             if attempt < max_retries:
                 wait_time = attempt
                 logging.warning(f"[Retry {attempt}/{max_retries}] Lỗi đọc file {file_name}: {e}. Thử lại sau {wait_time}s...")
-                time.sleep(wait_time)
+                time.sleep(wait_time)  # time đã import ở đầu file
             else:
                 logging.error(f"Lỗi khi đọc file {file_name} sau {max_retries} lần thử: {e}")
                 return pd.DataFrame()
@@ -109,7 +108,6 @@ def load_all_data(files_config: Dict[str, str], input_dir: Path, report_folder: 
         if key == 'duplicate_warnings':
             continue
             
-        # V5.2.1: Chỉ xử lý single file (không gộp list)
         if isinstance(filename_or_list, list):
             # Nếu là list, chỉ lấy file đầu tiên (đã có warning ở grouping stage)
             filename = filename_or_list[0]
@@ -120,7 +118,6 @@ def load_all_data(files_config: Dict[str, str], input_dir: Path, report_folder: 
         df = load_and_transform_one_file(input_dir / filename, filename, key, cleaned_files_dir)
         file_dfs[key] = df
     
-    # V4.5.2: Tách file chung thành các phần riêng biệt
     file_dfs = _split_combined_files(file_dfs, cleaned_files_dir)
     
     return file_dfs
@@ -171,7 +168,6 @@ def _split_combined_files(file_dfs: Dict[str, pd.DataFrame], cleaned_files_dir: 
         # Tìm cột chứa thông tin loại shifting (có thể là 'Hướng công việc' hoặc tương tự)
         shift_col = _find_shifting_type_column(df_shift)
         if shift_col:
-            # V4.5.2: Sửa regex - tránh 'SHIFTING' khớp với 'IN'
             # Discharge = Tàu đưa container xuống bãi (nhập bãi)
             mask_discharge = df_shift[shift_col].astype(str).str.upper().str.contains('DISCHARGE', regex=False, na=False)
             # Loading = Bãi đưa container lên tàu (xuất bãi)
@@ -199,7 +195,6 @@ def _split_combined_files(file_dfs: Dict[str, pd.DataFrame], cleaned_files_dir: 
         df_nx = file_dfs['nhapxuat_combined']
         logging.info(f"  -> Đang tách NHAPXUAT file ({len(df_nx)} records)...")
         
-        # V4.5.3: Sử dụng cột Hướng (Import/Export) làm key phân biệt
         huong_col = _find_huong_column(df_nx)
         
         if huong_col:

@@ -1,5 +1,5 @@
 # File: reports/email_sender.py
-# V5.4: Auto-send Email với external config và improved error handling
+# @2026 v1.0: Auto-send Email với external config và improved error handling
 
 import smtplib
 import logging

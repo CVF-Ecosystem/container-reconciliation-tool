@@ -1,4 +1,4 @@
-# File: reconciliation_engine.py (phiên bản V4.4 - Tái cấu trúc)
+# File: reconciliation_engine.py (phiên bản V4.4 - Tái cấu trúc) — @2026 v1.0
 import pandas as pd
 from pathlib import Path
 import logging
@@ -236,11 +236,9 @@ def perform_reconciliation(file_dfs: Dict[str, pd.DataFrame], report_folder: Pat
             df_ton_chuan.loc[mask_pending, 'GhiChu'] = 'Hàng đảo chuyển qua cầu tàu (Restow via Quay)'
     # <<< END V4.4 >>>
 
-    # V4.5: Đổi tên từ 'thieu/thua' sang 'chenh_lech'
     df_chenh_lech_am = df_ton_ly_thuyet[df_ton_ly_thuyet[Col.CONTAINER].isin(cont_thieu)].copy()  # Có lệnh chưa về
     df_chenh_lech_duong_raw = df_ton_moi[df_ton_moi[Col.CONTAINER].isin(cont_thua)].copy()  # Chưa có lệnh (raw)
     
-    # V5.1.1: NHẬN DIỆN CONTAINER CFS (Đóng hàng/Rút hàng) - Không phải "tồn chưa có lệnh"
     # Container CFS có cặp Gate OUT + Gate IN trong ngày, chỉ thay đổi F/E, vẫn tồn bãi
     df_bien_dong_fe = pd.DataFrame()  # Container biến động F/E (CFS)
     df_chenh_lech_duong = df_chenh_lech_duong_raw.copy()  # Tồn thực sự chưa có lệnh
@@ -299,7 +297,6 @@ def perform_reconciliation(file_dfs: Dict[str, pd.DataFrame], report_folder: Pat
                         
                         logging.info(f"  -> V5.1.1: {len(df_bien_dong_fe)} container CFS (Đóng/Rút hàng - đổi F/E) được tách riêng")
     
-    # V4.6: KIỂM TRA CHÉO NHẬP vs XUẤT
     # Container có NHẬP nhưng không tồn → Kiểm tra có XUẤT tương ứng không?
     df_da_xu_ly = pd.DataFrame()  # Có NHẬP + có XUẤT = flow bình thường
     df_nhap_khong_xuat = pd.DataFrame()  # Có NHẬP + KHÔNG có XUẤT = cảnh báo
@@ -337,7 +334,6 @@ def perform_reconciliation(file_dfs: Dict[str, pd.DataFrame], report_folder: Pat
     if not df_chenh_lech_duong.empty:
         df_chenh_lech_duong['TrangThai'] = 'Tồn bãi chưa có lệnh trong ngày'
     
-    # V5.1.2: Chỉ kiểm tra lỗi nghiêm trọng: Xuất Tàu nhưng vẫn tồn
     df_xuat_tau_van_ton = pd.DataFrame()
     set_ton_moi = set(df_ton_moi[Col.CONTAINER])
     
@@ -353,14 +349,13 @@ def perform_reconciliation(file_dfs: Dict[str, pd.DataFrame], report_folder: Pat
     if not df_xuat_tau_van_ton.empty:
         logging.error(f"  -> 🔴 {len(df_xuat_tau_van_ton)} container XUẤT TÀU nhưng vẫn tồn - LỖI NGHIÊM TRỌNG!")
 
-    # V5.1.2: Trả về kết quả đã dọn dẹp
     return {
         "ton_chuan": df_ton_chuan,
         "sai_thong_tin": df_sai_thong_tin_thuc,
         "dao_chuyen_noi_bai": df_dao_chuyen_noi_bai,
         "chenh_lech_am": df_chenh_lech_am,
         "chenh_lech_duong": df_chenh_lech_duong,
-        "bien_dong_fe": df_bien_dong_fe,  # V5.1.1: Container CFS - đổi F/E trong ngày
+        "bien_dong_fe": df_bien_dong_fe,
         "xuat_tau_van_ton": df_xuat_tau_van_ton,  # V5.1.2: Lỗi nghiêm trọng (Xuất tàu nhưng vẫn tồn)
         "master_log": df_all_moves_sorted,
         "future_moves_report": df_future_report,

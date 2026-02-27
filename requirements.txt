@@ -1,9 +1,11 @@
-# === CORE ===
+# === CORE DATA PROCESSING ===
 pandas>=2.0.0
 openpyxl>=3.1.0
 XlsxWriter>=3.1.0
+unidecode>=1.3.0          # Vietnamese text normalization (data_transformer.py)
+numpy>=1.24.0             # Numerical operations (anomaly_detector.py)
 
-# === GUI ===
+# === GUI (Desktop App) ===
 ttkbootstrap>=1.10.0
 tkcalendar>=1.6.0
 
@@ -11,6 +13,42 @@ tkcalendar>=1.6.0
 streamlit>=1.30.0
 plotly>=5.15.0
 
-# === OPTIONAL (for specific features) ===
-# schedule>=1.2.0      # V5.0: Task scheduler (auto-installed with app)
-# pystray>=0.19.0      # Future: System tray (not yet implemented)
+# === REST API ===
+fastapi>=0.100.0           # api/server.py
+uvicorn[standard]>=0.23.0  # ASGI server for FastAPI
+python-multipart>=0.0.6    # File upload support in FastAPI
+
+# === DATABASE ===
+sqlalchemy>=2.0.0          # ORM for UserStore (utils/db_models.py)
+# psycopg2-binary>=2.9.0   # PostgreSQL support (uncomment for production)
+
+# === AUTHENTICATION ===
+PyJWT>=2.8.0               # JWT token generation/validation (utils/auth.py)
+bcrypt>=4.0.0              # Secure password hashing (utils/auth.py)
+
+# === SCHEDULING ===
+schedule>=1.2.0            # Task scheduler (scheduler.py, utils/scheduler.py)
+
+# === REPORTS ===
+reportlab>=4.0.0           # PDF generation (reports/pdf_generator.py)
+
+# === ASYNC TASK QUEUE ===
+# celery>=5.3.0            # Async task queue (uncomment for production)
+# redis>=5.0.0             # Redis backend for Celery (uncomment for production)
+
+# === OBSERVABILITY ===
+# opentelemetry-api>=1.20.0                    # Tracing API
+# opentelemetry-sdk>=1.20.0                    # Tracing SDK
+# opentelemetry-exporter-otlp>=1.20.0          # OTLP exporter (Jaeger/Zipkin)
+# prometheus-client>=0.17.0                    # Prometheus metrics
+
+# === SECRETS MANAGEMENT ===
+# hvac>=1.2.0              # HashiCorp Vault client (uncomment if using Vault)
+# boto3>=1.28.0            # AWS SDK for Secrets Manager (uncomment if using AWS)
+
+# === TESTING ===
+pytest>=7.0.0
+pytest-cov>=4.0.0          # Coverage reporting
+pytest-xdist>=3.0.0        # Parallel test execution
+httpx>=0.24.0              # HTTP client for FastAPI TestClient
+hypothesis>=6.80.0         # Property-based testing (tests/test_property_based.py)

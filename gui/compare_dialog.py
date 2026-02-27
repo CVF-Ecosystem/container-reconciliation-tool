@@ -1,5 +1,5 @@
 # File: gui/compare_dialog.py
-# V5.4: Dialog so sánh 2 file Excel (App vs TOS)
+# @2026 v1.0: Dialog so sánh 2 file Excel (App vs TOS)
 """Dialog để so sánh file BIEN DONG/TON BAI từ App với file từ TOS Cảng."""
 
 import tkinter as tk

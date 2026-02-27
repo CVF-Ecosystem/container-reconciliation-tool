@@ -442,8 +442,12 @@ class TestAuthManager:
     """Tests for main authentication manager."""
     
     @pytest.fixture
-    def auth_manager(self, tmp_path):
-        """Create auth manager with temp storage."""
+    def auth_manager(self, tmp_path, monkeypatch):
+        """Create auth manager with temp storage.
+        
+        Set ADMIN_DEFAULT_PASSWORD env var để test có thể login với password biết trước.
+        """
+        monkeypatch.setenv("ADMIN_DEFAULT_PASSWORD", "test_admin_password_123")
         storage_path = tmp_path / "users.json"
         user_store = UserStore(storage_path=storage_path)
         return AuthManager(
@@ -459,8 +463,8 @@ class TestAuthManager:
         assert admin.role == Role.ADMIN
     
     def test_login_success(self, auth_manager):
-        """Test successful login."""
-        result = auth_manager.login("admin", "admin123")
+        """Test successful login with env var password."""
+        result = auth_manager.login("admin", "test_admin_password_123")
         
         assert result is not None
         assert "access_token" in result
@@ -479,7 +483,7 @@ class TestAuthManager:
     
     def test_verify_access_token(self, auth_manager):
         """Test verifying access token."""
-        tokens = auth_manager.login("admin", "admin123")
+        tokens = auth_manager.login("admin", "test_admin_password_123")
         
         user = auth_manager.verify_access_token(tokens["access_token"])
         
@@ -488,7 +492,7 @@ class TestAuthManager:
     
     def test_logout(self, auth_manager):
         """Test logout revokes token."""
-        tokens = auth_manager.login("admin", "admin123")
+        tokens = auth_manager.login("admin", "test_admin_password_123")
         token = tokens["access_token"]
         
         # Verify token works before logout
@@ -504,7 +508,7 @@ class TestAuthManager:
     
     def test_refresh_token(self, auth_manager):
         """Test refreshing access token."""
-        tokens = auth_manager.login("admin", "admin123")
+        tokens = auth_manager.login("admin", "test_admin_password_123")
         
         new_tokens = auth_manager.refresh_access_token(tokens["refresh_token"])
         
@@ -513,14 +517,14 @@ class TestAuthManager:
     
     def test_check_permission(self, auth_manager):
         """Test permission checking."""
-        tokens = auth_manager.login("admin", "admin123")
+        tokens = auth_manager.login("admin", "test_admin_password_123")
         user = auth_manager.verify_access_token(tokens["access_token"])
         
         assert auth_manager.check_permission(user, Permission.MANAGE_USERS) is True
     
     def test_require_permission_success(self, auth_manager):
         """Test require_permission succeeds for allowed permission."""
-        tokens = auth_manager.login("admin", "admin123")
+        tokens = auth_manager.login("admin", "test_admin_password_123")
         user = auth_manager.verify_access_token(tokens["access_token"])
         
         # Should not raise

@@ -1,5 +1,5 @@
 # File: utils/validators.py
-# V5.4: Data validation layer using Pydantic for container data validation
+# @2026 v1.0: Data validation layer using Pydantic for container data validation
 """
 Validation module for container inventory reconciliation.
 Provides:

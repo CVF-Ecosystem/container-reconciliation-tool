@@ -1,4 +1,4 @@
-# File: core_logic.py
+# File: core_logic.py — @2026 v1.0
 import os
 import pickle
 from datetime import datetime
@@ -23,7 +23,7 @@ from data.data_validator import validate_dataframes_structure, validate_datafram
 from core.reconciliation_engine import perform_reconciliation
 from core.advanced_checker import perform_simple_reconciliation
 from core.inventory_checker import compare_inventories
-from core.duplicate_checker import run_all_duplicate_checks  # V5.1: Import kiểm tra lỗi
+from core.duplicate_checker import run_all_duplicate_checks
 from reports.operator_analyzer import analyze_by_operator
 from reports.report_generator import create_reports
 from core.delta_checker import perform_delta_analysis
@@ -145,13 +145,10 @@ def create_summary_dataframe(main_results: Dict, simple_results: Dict, inventory
     # Chỉ hiện CẢNH BÁO nếu có lỗi thật
     van_ton_thuc_count = main_counts.get('van_ton_thuc', 0)
     
-    # V4.7: Layout đơn giản - bỏ phần kiểm tra chéo gây nhầm lẫn
     # Chỉ giữ lại các chỉ số quan trọng cho nghiệp vụ
     
-    # V4.7.1: Gộp đảo chuyển + sai thông tin thành 1 vì cùng là đổi vị trí
     dao_chuyen_total = dao_chuyen + sai_thong_tin
     
-    # V4.7.1: TỔNG phải = Tồn mới = Khớp + Đảo chuyển + Thừa
     tong_ton_bai = khop_hoan_toan_total + dao_chuyen_total + chenh_lech_duong
     
     data_rows = [
@@ -165,10 +162,9 @@ def create_summary_dataframe(main_results: Dict, simple_results: Dict, inventory
         ('Khop hoan toan', khop_hoan_toan_total),
         ('Dao chuyen vi tri', dao_chuyen_total),
         ('Ton bai chua co du lieu nguon', chenh_lech_duong),
-        ('TONG TON BAI', get_len('ton_moi')),  # V4.7.1: Lấy trực tiếp từ ton_moi để đảm bảo đúng
+        ('TONG TON BAI', get_len('ton_moi')),
     ]
     
-    # V4.7.1: Chỉ hiện ngày bất thường nếu có (> 0)
     future_moves = main_counts.get('future_moves', 0)
     suspicious_dates = main_counts.get('suspicious_dates', 0)
     if future_moves > 0:
@@ -194,7 +190,7 @@ def run_full_reconciliation_process(
     output_dir: Path,
     update_status: Optional[Callable[[str], None]] = None,
     update_progress: Optional[Callable[[int], None]] = None,
-    confirm_missing_ton_cu: Optional[Callable[[str], bool]] = None  # V4.7.2: Callback hỏi user khi thiếu TON CU
+    confirm_missing_ton_cu: Optional[Callable[[str], bool]] = None
 ) -> Path:
     """
     Execute the complete container inventory reconciliation workflow.
@@ -238,7 +234,6 @@ def run_full_reconciliation_process(
     _update_status("Bắt đầu quy trình đối soát...")
     _update_progress(0)
     run_time = datetime.now()
-    # V5.1.5: Format tên folder ngắn gọn: Report_N12.01.2026_12h55
     date_part = run_time.strftime("N%d.%m.%Y")
     time_part = run_time.strftime("%Hh%M")
     report_folder = output_dir / f"Report_{date_part}_{time_part}"
@@ -254,7 +249,6 @@ def run_full_reconciliation_process(
         )
     _update_progress(10)
     
-    # V4.7.2: Kiểm tra TON CU - nếu thiếu thì hỏi user
     ton_cu_from_db = None
     if 'ton_cu' not in files_to_process:
         _update_status("⚠️ CẢNH BÁO: Không tìm thấy file TON CU!")
@@ -292,7 +286,6 @@ def run_full_reconciliation_process(
     _update_status("Đang tải và làm sạch dữ liệu...")
     file_dfs = load_all_data(files_to_process, input_dir, report_folder)
     
-    # V4.7.2: Nếu có TON CU từ database, inject vào file_dfs
     if ton_cu_from_db is not None and not ton_cu_from_db.empty:
         file_dfs['ton_cu'] = ton_cu_from_db
         logging.info(f"Đã sử dụng {len(ton_cu_from_db)} container từ database làm TON CU")
@@ -308,7 +301,6 @@ def run_full_reconciliation_process(
         )
     quality_warnings = validate_dataframes_quality(file_dfs, DATA_VALIDATION_RULES)
     
-    # V4.7.2: Kiểm tra TẤT CẢ file có bị dùng lại (trùng với data cũ) không
     try:
         history_db = HistoryDatabase(output_dir)
         dup_results = history_db.check_all_files_duplicate(file_dfs)
@@ -341,7 +333,6 @@ def run_full_reconciliation_process(
     operator_analysis_result = analyze_by_operator(file_dfs)
     _update_progress(75)
     
-    # V5.1: Chạy kiểm tra lỗi nâng cao
     _update_status("Đang chạy kiểm tra lỗi V5.1...")
     v51_check_results = run_all_duplicate_checks(file_dfs)
     _update_progress(80)
@@ -364,7 +355,6 @@ def run_full_reconciliation_process(
     )
     _update_progress(90)
     # 6. Gộp kết quả
-    # V5.1: Thêm v51_checks vào main_results để report_generator có thể sử dụng
     main_results['v51_checks'] = v51_check_results
     
     final_results = {
@@ -392,13 +382,11 @@ def run_full_reconciliation_process(
         history_db = HistoryDatabase(output_dir)
         history_db.save_run(final_results)
         
-        # V4.7.2: Lưu snapshot tồn bãi hôm nay (sẽ là TON CU ngày mai)
         df_ton_moi = file_dfs.get('ton_moi', pd.DataFrame())
         if not df_ton_moi.empty:
             snapshot_count = history_db.save_daily_snapshot(df_ton_moi, run_time)
             _update_status(f"Đã lưu snapshot {snapshot_count} container...")
         
-        # V4.7.2: Lưu lịch sử giao dịch cho tra cứu lâu dài
         df_master_log = main_results.get('master_log', pd.DataFrame())
         if not df_master_log.empty:
             trans_count = history_db.save_transactions(df_master_log, run_time)

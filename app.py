@@ -1,156 +1,22 @@
-# File: app.py
+# File: app.py — @2026 v1.0
+import logging
 import streamlit as st
 import pandas as pd
 from pathlib import Path
 import config
+from config import DEFAULT_TEU_FACTOR, Col
+from datetime import datetime
+from datetime import datetime as dt  # alias for use in dwell/date calculations
 from core_logic import load_results
 from utils.translation import translator_instance
-
-# --- HÀM HỖ TRỢ ---
-def prepare_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Chuẩn bị DataFrame để hiển thị an toàn trên Streamlit.
-    Chuyển đổi tất cả các cột có kiểu dữ liệu hỗn hợp (object) sang chuỗi.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame()
-    
-    df_display = df.copy()
-    for col in df_display.columns:
-        # Nếu cột là kiểu 'object', chuyển nó sang 'string' để tránh lỗi PyArrow
-        if df_display[col].dtype == 'object':
-            df_display[col] = df_display[col].astype(str).replace('nan', '').replace('NaT', '')
-    return df_display
-
-def add_stt_column(df: pd.DataFrame, t=None) -> pd.DataFrame:
-    """Thêm cột STT (Số thứ tự) vào đầu DataFrame."""
-    if df is None or df.empty:
-        return df
-    df_copy = df.copy()
-    col_name = t('col_stt') if t else 'STT'
-    df_copy.insert(0, col_name, range(1, len(df_copy) + 1))
-    return df_copy
-
-def format_operator_table(df: pd.DataFrame, t=None, operator_col: str = None) -> pd.DataFrame:
-    """
-    Format bảng theo Hãng khai thác: thêm STT, đặt lại tên cột Hãng khai thác.
-    Handles dataframes where operator is in index or in a column.
-    """
-    if df is None or df.empty:
-        return df
-    
-    # Get the index name before reset
-    index_name = df.index.name
-    
-    df_copy = df.reset_index()
-    
-    # Determine the first column (which was the index) and rename it
-    first_col = df_copy.columns[0]
-    operator_label = t('col_operator') if t else 'Hãng khai thác'
-    
-    # Rename the first column to 'Hãng khai thác' if it looks like operator data
-    if first_col in ['index', index_name] or first_col is None:
-        df_copy = df_copy.rename(columns={first_col: operator_label})
-    elif operator_col and operator_col in df_copy.columns:
-        df_copy = df_copy.rename(columns={operator_col: operator_label})
-    # If first column is already named properly (e.g., 'Hãng khai thác'), keep it
-    
-    # Add STT column at the beginning
-    stt_label = t('col_stt') if t else 'STT'
-    if stt_label not in df_copy.columns and 'STT' not in df_copy.columns:
-        df_copy.insert(0, stt_label, range(1, len(df_copy) + 1))
-    
-    return df_copy
-
-def calculate_teus(df: pd.DataFrame, size_col: str = None) -> int:
-    """
-    Tính tổng TEUs từ DataFrame dựa trên kích thước container.
-    20ft = 1 TEU, 40ft/45ft = 2 TEUs
-    """
-    if df is None or df.empty:
-        return 0
-    
-    # Find size column
-    if size_col is None:
-        from config import Col
-        size_col = Col.ISO if hasattr(Col, 'ISO') else None
-    
-    if size_col is None or size_col not in df.columns:
-        # Default: assume all are 20ft (1 TEU each)
-        return len(df)
-    
-    total_teus = 0
-    for size in df[size_col]:
-        size_str = str(size).strip().upper() if pd.notna(size) else ''
-        # Check first 2 characters for size
-        if size_str.startswith('4') or size_str.startswith('45'):
-            total_teus += 2  # 40ft or 45ft = 2 TEUs
-        else:
-            total_teus += 1  # 20ft or unknown = 1 TEU
-    
-    return total_teus
-
-def add_teus_to_summary(df: pd.DataFrame, count_col: str, size_data: pd.DataFrame = None) -> pd.DataFrame:
-    """Thêm cột TEUs vào bảng tổng hợp."""
-    if df is None or df.empty:
-        return df
-    df_copy = df.copy()
-    # Simple estimation: assume average 1.5 TEU per container
-    if count_col in df_copy.columns:
-        df_copy['TEUs'] = (df_copy[count_col] * 1.5).astype(int)
-    return df_copy
-
-def add_teus_columns_to_operator_table(operator_df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Thêm cột TEUs vào bảng operator summary.
-    Tính TEUs cho mỗi hãng dựa trên dữ liệu raw.
-    """
-    if operator_df is None or operator_df.empty:
-        return operator_df
-    
-    from config import Col
-    
-    df_copy = operator_df.copy()
-    
-    # Get operator column name from index
-    operator_col = Col.OPERATOR if hasattr(Col, 'OPERATOR') else None
-    
-    if raw_df is not None and not raw_df.empty and operator_col and operator_col in raw_df.columns:
-        # Calculate TEUs for each operator
-        teus_dict = {}
-        for operator in df_copy.index:
-            operator_data = raw_df[raw_df[operator_col] == operator]
-            teus_dict[operator] = calculate_teus(operator_data)
-        
-        # Add TEUs columns based on existing columns
-        if 'Tồn Mới' in df_copy.columns:
-            df_copy['TEUs Mới'] = df_copy.index.map(lambda x: teus_dict.get(x, 0))
-        if 'Tồn Cũ' in df_copy.columns:
-            # Estimate TEUs for old stock (use same ratio)
-            df_copy['TEUs Cũ'] = (df_copy['Tồn Cũ'] * 1.5).astype(int)
-    else:
-        # Fallback: estimate based on 1.5 TEU per container
-        if 'Tồn Mới' in df_copy.columns:
-            df_copy['TEUs Mới'] = (df_copy['Tồn Mới'] * 1.5).astype(int)
-        if 'Tồn Cũ' in df_copy.columns:
-            df_copy['TEUs Cũ'] = (df_copy['Tồn Cũ'] * 1.5).astype(int)
-    
-    # Reorder columns to put TEUs next to corresponding Conts
-    new_cols = []
-    for col in df_copy.columns:
-        new_cols.append(col)
-        if col == 'Tồn Cũ' and 'TEUs Cũ' in df_copy.columns:
-            if 'TEUs Cũ' not in new_cols:
-                new_cols.append('TEUs Cũ')
-        if col == 'Tồn Mới' and 'TEUs Mới' in df_copy.columns:
-            if 'TEUs Mới' not in new_cols:
-                new_cols.append('TEUs Mới')
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    new_cols = [x for x in new_cols if not (x in seen or seen.add(x))]
-    
-    return df_copy[new_cols]
+from utils.display_helpers import (
+    prepare_df_for_display,
+    add_stt_column,
+    format_operator_table,
+    calculate_teus,
+    add_teus_to_summary,
+    add_teus_columns_to_operator_table,
+)
 
 # --- CẤU HÌNH TRANG & NGÔN NGỮ ---
 st.set_page_config(page_title="Báo cáo tồn bãi", layout="wide", initial_sidebar_state="expanded")
@@ -213,7 +79,6 @@ else:
     # Note: Variables for removed tabs (thieu, thua, sai_thong_tin) are no longer needed
 
     # Show timestamp and data availability info
-    from datetime import datetime
     current_time = datetime.now().strftime('%d/%m/%Y %H:%M')
     
     st.success(f"{t('showing_results')} {current_time}")
@@ -233,8 +98,8 @@ else:
             else:
                 date_range = f"{first_date} → {last_date}"
             st.info(f"📊 **{t('data_available')}** {dates_count} {t('days')} ({date_range})")
-    except Exception:
-        pass  # Silently fail if no history db
+    except Exception as e:
+        logging.debug(f"Could not load history database dates: {e}")
 
     tab_overview, tab_operator, tab_analytics, tab_fe, tab_export = st.tabs([
         t("tab_overview"), 
@@ -262,8 +127,8 @@ else:
                 # Calculate TEUs from raw data
                 df_ton_moi_raw = main_results.get("raw_data", {}).get("ton_moi")
                 df_ton_cu_raw = main_results.get("raw_data", {}).get("ton_cu")
-                teus_moi = calculate_teus(df_ton_moi_raw) if df_ton_moi_raw is not None else int(ton_moi * 1.5)
-                teus_cu = calculate_teus(df_ton_cu_raw) if df_ton_cu_raw is not None else int(ton_cu * 1.5)
+                teus_moi = calculate_teus(df_ton_moi_raw) if df_ton_moi_raw is not None else int(ton_moi * DEFAULT_TEU_FACTOR)
+                teus_cu = calculate_teus(df_ton_cu_raw) if df_ton_cu_raw is not None else int(ton_cu * DEFAULT_TEU_FACTOR)
                 teus_chenh = teus_moi - teus_cu
                 
                 # Create summary table
@@ -284,12 +149,12 @@ else:
                 da_roi = get_kpi('Container da roi bai')
                 dao_chuyen = get_kpi('Dao chuyen vi tri')
                 
-                # Estimate TEUs (average 1.5 TEU per container)
-                nhap_teus = int(nhap * 1.5)
-                xuat_teus = int(xuat * 1.5)
-                moi_vao_teus = int(moi_vao * 1.5)
-                da_roi_teus = int(da_roi * 1.5)
-                dao_chuyen_teus = int(dao_chuyen * 1.5)
+                # Estimate TEUs dùng DEFAULT_TEU_FACTOR từ config
+                nhap_teus = int(nhap * DEFAULT_TEU_FACTOR)
+                xuat_teus = int(xuat * DEFAULT_TEU_FACTOR)
+                moi_vao_teus = int(moi_vao * DEFAULT_TEU_FACTOR)
+                da_roi_teus = int(da_roi * DEFAULT_TEU_FACTOR)
+                dao_chuyen_teus = int(dao_chuyen * DEFAULT_TEU_FACTOR)
                 
                 # Create activity table with TEUs
                 activity_table = pd.DataFrame({
@@ -307,8 +172,6 @@ else:
         # ===== SECTION 5: PHÂN TÍCH THỜI GIAN TỒN BÃI =====
         st.subheader(t("header_dwell_time"))
         try:
-            from config import Col
-            from datetime import datetime as dt
             
             df_ton_moi = main_results.get("raw_data", {}).get("ton_moi")
             if df_ton_moi is not None and not df_ton_moi.empty:
@@ -362,14 +225,26 @@ else:
                         dwell_categories = [t('dwell_under_31'), t('dwell_31_60'), t('dwell_61_90'), t('dwell_over_90')]
                         dwell_by_operator = dwell_by_operator.reindex(columns=dwell_categories, fill_value=0)
                         
-                        # Calculate TEUs for each operator and dwell category
+                        # Tính TEUs theo operator × dwell category dùng groupby (O(n) thay vì O(n×m))
+                        # Tính TEU cho từng container một lần, sau đó aggregate
+                        if Col.ISO in df_dwell.columns:
+                            # Tính TEU per container: 40ft/45ft = 2, còn lại = 1
+                            df_dwell['_teu'] = df_dwell[Col.ISO].astype(str).str.strip().str.upper().apply(
+                                lambda s: 2 if s.startswith('4') else 1
+                            )
+                        else:
+                            df_dwell['_teu'] = DEFAULT_TEU_FACTOR
+                        
+                        # Aggregate TEU theo operator × dwell category một lần
+                        teu_pivot = df_dwell.groupby([Col.OPERATOR, 'Nhóm tồn'])['_teu'].sum().unstack(fill_value=0)
+                        teu_pivot = teu_pivot.reindex(columns=dwell_categories, fill_value=0)
+                        
                         for category in dwell_categories:
                             teus_col = f'{category} TEUs'
-                            teus_dict = {}
-                            for operator in dwell_by_operator.index:
-                                cat_df = df_dwell[(df_dwell[Col.OPERATOR] == operator) & (df_dwell['Nhóm tồn'] == category)]
-                                teus_dict[operator] = calculate_teus(cat_df)
-                            dwell_by_operator[teus_col] = dwell_by_operator.index.map(lambda x: teus_dict.get(x, 0))
+                            if category in teu_pivot.columns:
+                                dwell_by_operator[teus_col] = teu_pivot[category].reindex(dwell_by_operator.index, fill_value=0)
+                            else:
+                                dwell_by_operator[teus_col] = 0
                         
                         # Reorder columns: Conts then TEUs for each category
                         ordered_cols = []
@@ -391,7 +266,6 @@ else:
         # ===== SECTION 6: PHÂN TÍCH THEO VỊ TRÍ BÃI =====
         st.subheader(t("header_location"))
         try:
-            from config import Col
             
             df_ton_moi = main_results.get("raw_data", {}).get("ton_moi")
             if df_ton_moi is not None and not df_ton_moi.empty and Col.LOCATION in df_ton_moi.columns:
@@ -458,8 +332,8 @@ else:
             # Calculate TEUs
             df_ton_moi_raw = main_results.get("raw_data", {}).get("ton_moi")
             df_ton_cu_raw = main_results.get("raw_data", {}).get("ton_cu")
-            teus_moi = calculate_teus(df_ton_moi_raw) if df_ton_moi_raw is not None else int(total_ton_moi * 1.5)
-            teus_cu = calculate_teus(df_ton_cu_raw) if df_ton_cu_raw is not None else int(total_ton_cu * 1.5)
+            teus_moi = calculate_teus(df_ton_moi_raw) if df_ton_moi_raw is not None else int(total_ton_moi * DEFAULT_TEU_FACTOR)
+            teus_cu = calculate_teus(df_ton_cu_raw) if df_ton_cu_raw is not None else int(total_ton_cu * DEFAULT_TEU_FACTOR)
             
             # Create operator summary table
             operator_overview = pd.DataFrame({
@@ -575,8 +449,6 @@ else:
             
             df_ton_moi = main_results.get("raw_data", {}).get("ton_moi")
             if df_ton_moi is not None and not df_ton_moi.empty:
-                from config import Col
-                from datetime import datetime
                 
                 if Col.NGAY_NHAP_BAI in df_ton_moi.columns:
                     df_dwell = df_ton_moi.copy()
@@ -634,7 +506,6 @@ else:
         st.header(t("header_fe_status"))
         
         try:
-            from config import Col
             import plotly.express as px
             
             df_ton_moi = main_results.get("raw_data", {}).get("ton_moi")
@@ -714,8 +585,6 @@ else:
         
         try:
             from utils.history_db import HistoryDatabase
-            from datetime import datetime, timedelta
-            from config import Col
             
             db = HistoryDatabase(config.OUTPUT_DIR)
             available_dates = db.get_available_dates(limit=30)
@@ -726,7 +595,6 @@ else:
                 # Data availability already shown in header - no need to repeat here
                 
                 # Convert available dates to datetime objects for date_input
-                from datetime import datetime as dt
                 available_date_objs = [dt.strptime(d, '%Y-%m-%d').date() for d in available_dates]
                 min_date = min(available_date_objs)
                 max_date = max(available_date_objs)

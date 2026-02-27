@@ -1,5 +1,5 @@
 # File: utils/profiler.py
-# V5.4: Performance profiling utilities
+# @2026 v1.0: Performance profiling utilities
 """
 Performance Profiling Module for Container Inventory Reconciliation Tool.
 

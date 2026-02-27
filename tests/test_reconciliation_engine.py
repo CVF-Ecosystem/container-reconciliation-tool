@@ -63,31 +63,42 @@ class TestMismatchDetection(unittest.TestCase):
         from core.reconciliation_engine import _find_mismatched_rows
         self._find_mismatched_rows = _find_mismatched_rows
     
-    @unittest.skip("V4.7.1: Col.OPERATOR removed from COMPARE_COLS - keep for future use")
-    def test_detects_operator_mismatch(self):
-        """Verify mismatch is detected when operator differs."""
+    def test_operator_column_not_in_compare_cols(self):
+        """V4.7.1+: Col.OPERATOR không còn trong COMPARE_COLS_FOR_MISMATCH.
+        
+        Operator mismatch không được detect nữa vì file giao dịch không có cột Hãng.
+        Test này verify rằng operator khác nhau KHÔNG bị coi là mismatch.
+        """
         df = pd.DataFrame({
             f'{Col.OPERATOR}_lythuyet': ['VMC'],
             f'{Col.OPERATOR}_thucte': ['VFC'],
             f'{Col.FE}_lythuyet': ['F'],
             f'{Col.FE}_thucte': ['F'],
+            f'{Col.ISO}_lythuyet': ['20'],
+            f'{Col.ISO}_thucte': ['20'],
+            f'{Col.LOCATION}_lythuyet': ['A-01'],
+            f'{Col.LOCATION}_thucte': ['A-01'],
         })
         
         result = self._find_mismatched_rows(df)
-        self.assertTrue(result.iloc[0])  # Should be True (mismatch found)
+        # Operator khác nhau nhưng FE/ISO/LOCATION giống nhau → KHÔNG phải mismatch
+        self.assertFalse(result.iloc[0])
     
-    @unittest.skip("V4.7.1: Col.OPERATOR removed from COMPARE_COLS - keep for future use")
-    def test_no_mismatch_when_identical(self):
-        """Verify no mismatch when all columns match."""
+    def test_no_mismatch_when_all_compare_cols_identical(self):
+        """Verify no mismatch when FE, ISO, LOCATION all match (V4.7.1+)."""
         df = pd.DataFrame({
             f'{Col.OPERATOR}_lythuyet': ['VMC'],
-            f'{Col.OPERATOR}_thucte': ['VMC'],
+            f'{Col.OPERATOR}_thucte': ['VFC'],  # Operator khác nhau nhưng không check
             f'{Col.FE}_lythuyet': ['F'],
             f'{Col.FE}_thucte': ['F'],
+            f'{Col.ISO}_lythuyet': ['40HC'],
+            f'{Col.ISO}_thucte': ['40HC'],
+            f'{Col.LOCATION}_lythuyet': ['A-01-01'],
+            f'{Col.LOCATION}_thucte': ['A-01-01'],
         })
         
         result = self._find_mismatched_rows(df)
-        self.assertFalse(result.iloc[0])  # Should be False (no mismatch)
+        self.assertFalse(result.iloc[0])  # No mismatch in checked columns
     
     def test_detects_fe_mismatch(self):
         """V4.7.1: Test with current comparison columns (FE, ISO, LOCATION)."""

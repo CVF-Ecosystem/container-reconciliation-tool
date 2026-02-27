@@ -5,7 +5,6 @@ import logging
 from typing import Dict, Any, Optional
 from config import Col
 
-# V5.1 Import movement summary
 try:
     from reports.movement_summary import generate_full_movement_report
 except ImportError:
@@ -340,10 +339,8 @@ def create_reports(all_results: Dict[str, Any]) -> None:
         with pd.ExcelWriter(chenh_lech_path, engine='xlsxwriter') as writer:
             _write_sheet(writer, main_results.get('chenh_lech_am'), "Co_Lenh_Chua_Ve")
             _write_sheet(writer, main_results.get('chenh_lech_duong'), "Ton_Chua_Co_Lenh")
-            # V5.1.1: Container CFS (Đóng/Rút hàng) - đổi F/E trong ngày, vẫn tồn bãi
             _write_sheet(writer, main_results.get('bien_dong_fe'), "Bien_Dong_FE_CFS")
             _write_sheet(writer, main_results.get('sai_thong_tin'), "Sai_Thong_Tin")
-            # V5.1.2: Lỗi nghiêm trọng - Xuất tàu nhưng vẫn tồn
             _write_sheet(writer, main_results.get('xuat_tau_van_ton'), "Xuat_Tau_Van_Ton_LOI")
     except Exception as e:
         logging.error(f"Lỗi khi tạo CHENH_LECH: {e}")
@@ -445,7 +442,6 @@ def create_reports(all_results: Dict[str, Any]) -> None:
         if not details_ton_moi.empty and 'Lines' in details_ton_moi.columns:
             all_lines.update(details_ton_moi['Lines'].unique())
         
-        # V5.1.4: Tạo FILE RIÊNG cho từng hãng
         for lines_name in sorted(all_lines):
             safe_name = lines_name.replace(' ', '_').replace('/', '_')
             file_path = hang_folder / f"TON_{safe_name}.xlsx"
@@ -456,7 +452,6 @@ def create_reports(all_results: Dict[str, Any]) -> None:
                 df_moi_hang = details_ton_moi[details_ton_moi['Lines'] == lines_name].copy() if not details_ton_moi.empty and 'Lines' in details_ton_moi.columns else pd.DataFrame()
                 df_bd_hang = df_bien_dong[df_bien_dong['Lines'] == lines_name].copy() if not df_bien_dong.empty and 'Lines' in df_bien_dong.columns else pd.DataFrame()
                 
-                # V5.1.4: Thêm thông tin time slot config cho hãng này
                 time_config_note = ""
                 if has_time_filter and Col.OPERATOR in df_cu_hang.columns:
                     # Lấy operator code đầu tiên trong Lines này
@@ -542,12 +537,10 @@ def create_reports(all_results: Dict[str, Any]) -> None:
         
         # Xuất files cho tất cả operators (với parallel processing)
         if not df_bien_dong_email.empty or not df_ton_bai_email.empty:
-            # V5.5: Lấy thêm dữ liệu cho Stacking/Incoming filter
             df_ton_cu = raw_data.get('ton_cu', pd.DataFrame())
             df_gate_in = raw_data.get('gate_in', pd.DataFrame())
             df_gate_out = raw_data.get('gate_out', pd.DataFrame())
             
-            # V5.6: Enrich biến động với dữ liệu từ raw gate files
             if not df_bien_dong_email.empty:
                 try:
                     from reports.email_template_exporter import enrich_with_raw_gate_data
@@ -565,17 +558,16 @@ def create_reports(all_results: Dict[str, Any]) -> None:
                 df_ton_bai=df_ton_bai_email,
                 date_str=date_str,
                 output_dir=email_folder,
-                parallel=True,  # V5.3: Enable parallel export
-                df_ton_cu=df_ton_cu,  # V5.5: For Stacking filter
-                df_gate_in=df_gate_in,  # V5.5: For Stacking/Incoming filter
-                df_gate_out=df_gate_out,  # V5.5: For Stacking filter
-                enable_stacking_incoming_filter=True  # V5.5: Enable filtering
+                parallel=True,
+                df_ton_cu=df_ton_cu,
+                df_gate_in=df_gate_in,
+                df_gate_out=df_gate_out,
+                enable_stacking_incoming_filter=True
             )
             logging.info(f"[EMAIL_TEMPLATES] Đã tạo files email cho {len(export_results)} hãng tại: {email_folder}")
 
 
             
-            # V5.3: Optional auto-send email
             # Uncomment để bật tự động gửi email
             # try:
             #     from reports.email_sender import send_operator_emails
@@ -648,7 +640,6 @@ def create_reports(all_results: Dict[str, Any]) -> None:
                 }])
                 _write_sheet(writer, balance_df, "Can_Doi", add_total=False)
                 
-                # V5.5: Sheet 3 - VOSCO Movement Summary (CHỈ COC, LOẠI TRỪ SOC)
                 try:
                     from reports.movement_summary import create_vosco_movement_summary
                     df_vosco = create_vosco_movement_summary(raw_data, exclude_soc=True)

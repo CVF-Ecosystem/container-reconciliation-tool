@@ -1,5 +1,5 @@
 # File: reports/email_template_exporter.py
-# V5.2: Xuất file theo template chuẩn BIEN DONG và TON BAI để gửi email cho hãng tàu
+# @2026 v1.0: Xuất file theo template chuẩn BIEN DONG và TON BAI để gửi email cho hãng tàu
 
 import pandas as pd
 import logging
@@ -42,7 +42,7 @@ TON_BAI_COLUMNS = [
 
 # === COLUMN MAPPING ===
 # Map từ columns nội bộ sang template columns
-# V5.4: Mở rộng mapping để bao phủ tất cả các cột trong template
+# @2026 v1.0: Mở rộng mapping để bao phủ tất cả các cột trong template
 
 BIEN_DONG_MAPPING = {
     # Các cột từ config.Col

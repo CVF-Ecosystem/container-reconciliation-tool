@@ -1,22 +1,11 @@
-# File: main.py
-import os
-from datetime import datetime
+# File: main.py — @2026 v1.0
 import logging
+from datetime import datetime
 from pathlib import Path
 import sys
 from tkinter import messagebox
-import pandas as pd
 import config
-from data.data_loader import load_all_data
-from data.data_validator import validate_dataframes_structure, validate_dataframes_quality
-from core.reconciliation_engine import perform_reconciliation
-from core.advanced_checker import perform_simple_reconciliation
-from core.inventory_checker import compare_inventories
-from reports.operator_analyzer import analyze_by_operator
-from reports.report_generator import create_reports
-from core.delta_checker import perform_delta_analysis
 from core_logic import run_full_reconciliation_process
-from config import Col, REQUIRED_COLUMNS_PER_FILE, DATA_VALIDATION_RULES
 
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_TIME = datetime.now()

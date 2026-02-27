@@ -1,4 +1,4 @@
-# File: utils/auth.py
+# File: utils/auth.py — @2026 v1.0
 """
 Authentication & Authorization Module for Container Inventory Reconciliation Tool.
 
@@ -13,6 +13,7 @@ Features:
 
 import hashlib
 import secrets
+import sqlite3
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -180,13 +181,19 @@ class TokenManager:
         secret_key: str,
         algorithm: str = "HS256",
         access_token_expire_minutes: int = 30,
-        refresh_token_expire_days: int = 7
+        refresh_token_expire_days: int = 7,
+        revoked_tokens_db_path: Optional[Path] = None
     ):
         self.secret_key = secret_key
         self.algorithm = algorithm
         self.access_token_expire = timedelta(minutes=access_token_expire_minutes)
         self.refresh_token_expire = timedelta(days=refresh_token_expire_days)
+        # In-memory cache + SQLite persistence để tránh mất khi restart
         self._revoked_tokens: set = set()
+        self._revoked_db_path = revoked_tokens_db_path
+        if self._revoked_db_path:
+            self._init_revoked_db()
+            self._load_revoked_tokens()
     
     def create_access_token(self, user: User) -> str:
         """Create JWT access token."""
@@ -233,7 +240,7 @@ class TokenManager:
     
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode JWT token."""
-        if token in self._revoked_tokens:
+        if self.is_token_revoked(token):
             return None
         
         if JWT_AVAILABLE:
@@ -255,13 +262,69 @@ class TokenManager:
             # In production, use proper JWT
             return {"sub": "unknown", "role": "viewer"}
     
+    def _init_revoked_db(self):
+        """Khởi tạo bảng revoked_tokens trong SQLite."""
+        self._revoked_db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(self._revoked_db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS revoked_tokens (
+                    token_hash TEXT PRIMARY KEY,
+                    revoked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME
+                )
+            """)
+            conn.commit()
+    
+    def _load_revoked_tokens(self):
+        """Load revoked tokens từ SQLite vào in-memory set."""
+        try:
+            with sqlite3.connect(str(self._revoked_db_path)) as conn:
+                # Chỉ load token chưa hết hạn
+                rows = conn.execute(
+                    "SELECT token_hash FROM revoked_tokens WHERE expires_at > datetime('now') OR expires_at IS NULL"
+                ).fetchall()
+                self._revoked_tokens = {row[0] for row in rows}
+                logging.debug(f"Loaded {len(self._revoked_tokens)} revoked tokens from DB")
+        except Exception as e:
+            logging.warning(f"Could not load revoked tokens: {e}")
+    
+    def _hash_token(self, token: str) -> str:
+        """Hash token để lưu vào DB (không lưu token gốc)."""
+        import hashlib
+        return hashlib.sha256(token.encode()).hexdigest()
+    
     def revoke_token(self, token: str):
-        """Revoke a token (logout)."""
-        self._revoked_tokens.add(token)
+        """Revoke a token (logout). Persist vào SQLite nếu có DB."""
+        token_hash = self._hash_token(token)
+        self._revoked_tokens.add(token_hash)
+        
+        if self._revoked_db_path:
+            try:
+                # Tính expiry time từ token nếu có thể
+                expires_at = None
+                if JWT_AVAILABLE:
+                    try:
+                        payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm], options={"verify_exp": False})
+                        exp = payload.get("exp")
+                        if exp:
+                            from datetime import timezone
+                            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        pass
+                
+                with sqlite3.connect(str(self._revoked_db_path)) as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO revoked_tokens (token_hash, expires_at) VALUES (?, ?)",
+                        (token_hash, expires_at)
+                    )
+                    conn.commit()
+            except Exception as e:
+                logging.warning(f"Could not persist revoked token: {e}")
     
     def is_token_revoked(self, token: str) -> bool:
         """Check if token is revoked."""
-        return token in self._revoked_tokens
+        token_hash = self._hash_token(token)
+        return token_hash in self._revoked_tokens
 
 
 class UserStore:
@@ -390,6 +453,88 @@ class UserStore:
         """List all users."""
         return list(self._users.values())
     
+    # ============ API KEY MANAGEMENT ============
+    
+    def create_api_key(self, user_id: str, description: str = "") -> Optional[str]:
+        """
+        Tạo API key mới cho user.
+        
+        API key là random token 32 bytes, được hash trước khi lưu.
+        Trả về raw key (chỉ hiển thị một lần).
+        
+        Args:
+            user_id: ID của user cần tạo API key
+            description: Mô tả mục đích sử dụng API key
+        
+        Returns:
+            Raw API key string (chỉ hiển thị một lần), hoặc None nếu user không tồn tại
+        """
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return None
+        
+        # Generate random API key
+        raw_key = f"ak_{secrets.token_urlsafe(32)}"
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        
+        # Lưu vào metadata của user
+        if 'api_keys' not in user.metadata:
+            user.metadata['api_keys'] = []
+        
+        user.metadata['api_keys'].append({
+            'key_hash': key_hash,
+            'description': description,
+            'created_at': datetime.now().isoformat(),
+            'last_used': None
+        })
+        
+        self._save_users()
+        logging.info(f"Created API key for user: {user.username}")
+        return raw_key
+    
+    def verify_api_key(self, raw_key: str) -> Optional[User]:
+        """
+        Xác thực API key và trả về user tương ứng.
+        
+        Args:
+            raw_key: Raw API key từ request header
+        
+        Returns:
+            User nếu key hợp lệ và user active, None nếu không hợp lệ
+        """
+        if not raw_key or not raw_key.startswith('ak_'):
+            return None
+        
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        
+        for user in self._users.values():
+            if not user.is_active:
+                continue
+            api_keys = user.metadata.get('api_keys', [])
+            for key_entry in api_keys:
+                if key_entry.get('key_hash') == key_hash:
+                    # Cập nhật last_used
+                    key_entry['last_used'] = datetime.now().isoformat()
+                    self._save_users()
+                    return user
+        
+        return None
+    
+    def revoke_api_key(self, user_id: str, key_hash: str) -> bool:
+        """Revoke một API key cụ thể."""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return False
+        
+        api_keys = user.metadata.get('api_keys', [])
+        original_count = len(api_keys)
+        user.metadata['api_keys'] = [k for k in api_keys if k.get('key_hash') != key_hash]
+        
+        if len(user.metadata['api_keys']) < original_count:
+            self._save_users()
+            return True
+        return False
+    
     def authenticate(self, username: str, password: str) -> Optional[User]:
         """Authenticate user with username and password."""
         user = self.get_user_by_username(username)
@@ -433,15 +578,31 @@ class AuthManager:
             self._create_default_admin()
     
     def _create_default_admin(self):
-        """Create default admin user."""
+        """Create default admin user.
+        
+        Password được đọc từ env var ADMIN_DEFAULT_PASSWORD.
+        Nếu không có, tự động generate random password an toàn và log ra console.
+        """
+        import os
+        
+        # Đọc password từ env var, nếu không có thì generate random
+        default_password = os.getenv("ADMIN_DEFAULT_PASSWORD")
+        if not default_password:
+            default_password = secrets.token_urlsafe(16)
+            logging.warning(
+                f"[SECURITY] No ADMIN_DEFAULT_PASSWORD env var set. "
+                f"Generated random admin password: {default_password}\n"
+                f"Please set ADMIN_DEFAULT_PASSWORD env var or change password immediately after first login."
+            )
+        
         try:
             self.user_store.create_user(
                 username="admin",
                 email="admin@localhost",
-                password="admin123",  # Should be changed on first login
+                password=default_password,
                 role=Role.ADMIN
             )
-            logging.info("Created default admin user (username: admin, password: admin123)")
+            logging.info("Created default admin user (username: admin). Check logs for password if not set via env var.")
         except ValueError:
             pass  # Admin already exists
     

@@ -265,29 +265,40 @@ class HistoryDatabase:
             # Xóa snapshot cũ của ngày này (nếu có) để cập nhật mới
             cursor.execute("DELETE FROM container_snapshots WHERE snapshot_date = ?", (date_str,))
             
-            # Chuẩn bị dữ liệu
-            count = 0
-            for _, row in df_ton_moi.iterrows():
-                container_id = str(row.get(Col.CONTAINER, ''))
-                if not container_id:
-                    continue
-                    
-                cursor.execute("""
-                    INSERT OR REPLACE INTO container_snapshots 
-                    (snapshot_date, container_id, fe, iso, operator, location, job_order, ngay_nhap_bai)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    date_str,
-                    container_id,
-                    str(row.get(Col.FE, '')),
-                    str(row.get(Col.ISO, '')),
-                    str(row.get(Col.OPERATOR, '')),
-                    str(row.get(Col.LOCATION, '')),
-                    str(row.get(Col.JOB_ORDER, '')),
-                    str(row.get(Col.NGAY_NHAP_BAI, ''))
-                ))
-                count += 1
+            # Chuẩn bị dữ liệu dùng vectorized pandas thay vì iterrows() (nhanh hơn nhiều)
+            # Dùng reindex để đảm bảo tất cả cột có cùng độ dài, tránh lỗi zip với Series rỗng
+            n = len(df_ton_moi)
             
+            def _get_col_str(col_name: str) -> pd.Series:
+                """Lấy cột dưới dạng string, trả về Series rỗng nếu không có cột."""
+                if col_name in df_ton_moi.columns:
+                    return df_ton_moi[col_name].astype(str).fillna('')
+                return pd.Series([''] * n, index=df_ton_moi.index)
+            
+            containers = _get_col_str(Col.CONTAINER)
+            fes = _get_col_str(Col.FE)
+            isos = _get_col_str(Col.ISO)
+            operators = _get_col_str(Col.OPERATOR)
+            locations = _get_col_str(Col.LOCATION)
+            job_orders = _get_col_str(Col.JOB_ORDER)
+            ngay_nhaps = _get_col_str(Col.NGAY_NHAP_BAI)
+            
+            rows = [
+                (date_str, cid, fe, iso, op, loc, jo, nn)
+                for cid, fe, iso, op, loc, jo, nn in zip(
+                    containers, fes, isos, operators, locations, job_orders, ngay_nhaps
+                )
+                if cid and cid != 'nan' and cid != ''
+            ]
+            
+            # Dùng executemany() thay vì loop execute() — nhanh hơn ~10-50x
+            cursor.executemany("""
+                INSERT OR REPLACE INTO container_snapshots
+                (snapshot_date, container_id, fe, iso, operator, location, job_order, ngay_nhap_bai)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+            
+            count = len(rows)
             conn.commit()
             logging.info(f"Đã lưu snapshot {count} container cho ngày {date_str}")
             return count
@@ -364,29 +375,39 @@ class HistoryDatabase:
                     (date_str,)
                 )
             
-            count = 0
-            for _, row in df_ton_moi.iterrows():
-                container_id = str(row.get(Col.CONTAINER, ''))
-                if not container_id:
-                    continue
-                    
-                cursor.execute("""
-                    INSERT OR REPLACE INTO container_snapshots 
-                    (snapshot_date, time_slot, container_id, fe, iso, operator, location, job_order, ngay_nhap_bai)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    date_str,
-                    time_slot,
-                    container_id,
-                    str(row.get(Col.FE, '')),
-                    str(row.get(Col.ISO, '')),
-                    str(row.get(Col.OPERATOR, '')),
-                    str(row.get(Col.LOCATION, '')),
-                    str(row.get(Col.JOB_ORDER, '')),
-                    str(row.get(Col.NGAY_NHAP_BAI, ''))
-                ))
-                count += 1
+            # Chuẩn bị dữ liệu dùng vectorized pandas thay vì iterrows()
+            n = len(df_ton_moi)
             
+            def _get_col_str_slot(col_name: str) -> pd.Series:
+                """Lấy cột dưới dạng string, trả về Series rỗng nếu không có cột."""
+                if col_name in df_ton_moi.columns:
+                    return df_ton_moi[col_name].astype(str).fillna('')
+                return pd.Series([''] * n, index=df_ton_moi.index)
+            
+            containers = _get_col_str_slot(Col.CONTAINER)
+            fes = _get_col_str_slot(Col.FE)
+            isos = _get_col_str_slot(Col.ISO)
+            operators = _get_col_str_slot(Col.OPERATOR)
+            locations = _get_col_str_slot(Col.LOCATION)
+            job_orders = _get_col_str_slot(Col.JOB_ORDER)
+            ngay_nhaps = _get_col_str_slot(Col.NGAY_NHAP_BAI)
+            
+            rows = [
+                (date_str, time_slot, cid, fe, iso, op, loc, jo, nn)
+                for cid, fe, iso, op, loc, jo, nn in zip(
+                    containers, fes, isos, operators, locations, job_orders, ngay_nhaps
+                )
+                if cid and cid != 'nan' and cid != ''
+            ]
+            
+            # Dùng executemany() thay vì loop execute()
+            cursor.executemany("""
+                INSERT OR REPLACE INTO container_snapshots
+                (snapshot_date, time_slot, container_id, fe, iso, operator, location, job_order, ngay_nhap_bai)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+            
+            count = len(rows)
             conn.commit()
             slot_label = f" ({time_slot})" if time_slot else ""
             logging.info(f"Đã lưu snapshot {count} container cho ngày {date_str}{slot_label}")

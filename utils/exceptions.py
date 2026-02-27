@@ -1,4 +1,4 @@
-# File: exceptions.py
+# File: exceptions.py — @2026 v1.0
 # Custom exception classes for Container Inventory Reconciliation Tool V5.4
 # Provides specific error handling with error codes and translation support
 

@@ -1,5 +1,5 @@
 # File: reports/pdf_generator.py
-# V5.4 Phase 2: PDF Report Generation with Charts
+# @2026 v1.0: PDF Report Generation with Charts
 """
 PDF Report Generator Module.
 
