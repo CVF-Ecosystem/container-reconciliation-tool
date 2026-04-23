@@ -12,7 +12,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime as dt
 
-from pages._shared import setup_page, get_results, show_data_info
+from utils.streamlit_shared import setup_page, get_results, show_data_info
 import config
 from config import Col, DEFAULT_TEU_FACTOR
 from utils.display_helpers import (

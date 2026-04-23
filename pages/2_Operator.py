@@ -10,7 +10,7 @@ Page 2: Tổng quan theo Hãng tàu (Operator)
 import streamlit as st
 import pandas as pd
 
-from pages._shared import setup_page, get_results, show_data_info
+from utils.streamlit_shared import setup_page, get_results, show_data_info
 import config
 from config import DEFAULT_TEU_FACTOR
 from utils.display_helpers import (
