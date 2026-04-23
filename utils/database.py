@@ -321,6 +321,7 @@ class Database:
     def __init__(self, config: Optional[DatabaseConfig] = None):
         self.config = config or DatabaseConfig()
         self._pool = ConnectionPool(self.config)
+        self._operation_lock = threading.Lock()
     
     @contextmanager
     def connection(self):
@@ -350,18 +351,21 @@ class Database:
     
     def execute(self, query: str, params: Optional[tuple] = None) -> Any:
         """Execute a query."""
-        with self.connection() as conn:
-            return conn.execute(query, params)
+        with self._operation_lock:
+            with self.connection() as conn:
+                return conn.execute(query, params)
     
     def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[Dict]:
         """Fetch one row."""
-        with self.connection() as conn:
-            return conn.fetch_one(query, params)
+        with self._operation_lock:
+            with self.connection() as conn:
+                return conn.fetch_one(query, params)
     
     def fetch_all(self, query: str, params: Optional[tuple] = None) -> List[Dict]:
         """Fetch all rows."""
-        with self.connection() as conn:
-            return conn.fetch_all(query, params)
+        with self._operation_lock:
+            with self.connection() as conn:
+                return conn.fetch_all(query, params)
     
     def close(self):
         """Close database and pool."""

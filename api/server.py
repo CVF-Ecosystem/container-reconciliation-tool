@@ -21,7 +21,7 @@ from typing import Optional, List, Dict, Any
 from enum import Enum
 
 try:
-    from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, UploadFile, File
+    from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, UploadFile, File, Depends
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse
     from pydantic import BaseModel, Field
@@ -31,6 +31,18 @@ except ImportError:
     logging.warning("FastAPI not installed. Run: pip install fastapi uvicorn python-multipart")
 
 if FASTAPI_AVAILABLE:
+    from api.auth_middleware import auth_router, check_rate_limit, require_permission
+    from utils.auth import Permission
+
+    try:
+        import python_multipart  # noqa: F401
+        MULTIPART_AVAILABLE = True
+    except ImportError:
+        try:
+            import multipart  # noqa: F401
+            MULTIPART_AVAILABLE = True
+        except ImportError:
+            MULTIPART_AVAILABLE = False
     
     # ============ PYDANTIC MODELS ============
     
@@ -115,6 +127,8 @@ if FASTAPI_AVAILABLE:
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     )
+
+    app.include_router(auth_router)
     
     # Global state
     _start_time = datetime.now()
@@ -144,13 +158,9 @@ if FASTAPI_AVAILABLE:
         - File system access
         """
         from utils.health_check import run_health_checks
-        
-        try:
-            checks = run_health_checks()
-            all_ok = all(checks.values())
-        except Exception:
-            checks = {"api": True}
-            all_ok = True
+
+        checks = run_health_checks()
+        all_ok = checks.get("critical", all(checks.values()))
         
         return HealthResponse(
             status="healthy" if all_ok else "degraded",
@@ -173,7 +183,15 @@ if FASTAPI_AVAILABLE:
     
     # ============ RECONCILIATION ENDPOINTS ============
     
-    @app.post("/reconcile", response_model=ReconciliationResponse, tags=["Reconciliation"])
+    @app.post(
+        "/reconcile",
+        response_model=ReconciliationResponse,
+        tags=["Reconciliation"],
+        dependencies=[
+            Depends(check_rate_limit),
+            Depends(require_permission(Permission.RUN_RECONCILIATION)),
+        ],
+    )
     async def run_reconciliation(
         request: ReconciliationRequest,
         background_tasks: BackgroundTasks
@@ -339,27 +357,77 @@ if FASTAPI_AVAILABLE:
         
         return files
     
-    @app.post("/files/upload", tags=["Files"])
-    async def upload_file(file: UploadFile = File(...)):
-        """Upload an Excel file to the input directory."""
-        from config import INPUT_DIR
-        
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(status_code=400, detail="Only Excel files are allowed")
-        
-        input_path = Path(INPUT_DIR)
-        input_path.mkdir(parents=True, exist_ok=True)
-        
-        file_path = input_path / file.filename
-        
-        try:
-            contents = await file.read()
-            with open(file_path, 'wb') as f:
-                f.write(contents)
-            
-            return {"message": f"File uploaded successfully", "path": str(file_path)}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    if MULTIPART_AVAILABLE:
+        @app.post(
+            "/files/upload",
+            tags=["Files"],
+            dependencies=[
+                Depends(check_rate_limit),
+                Depends(require_permission(Permission.EXPORT_DATA)),
+            ],
+        )
+        async def upload_file(file: UploadFile = File(...)):
+            """Upload an Excel file to the input directory."""
+            from config import INPUT_DIR
+
+            filename = Path(file.filename or "").name
+            suffix = Path(filename).suffix.lower()
+            allowed_extensions = {".xlsx", ".xls"}
+            allowed_content_types = {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel",
+                "application/octet-stream",
+            }
+            max_upload_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+
+            if not filename or filename in {".", ".."}:
+                raise HTTPException(status_code=400, detail="Invalid filename")
+
+            if suffix not in allowed_extensions:
+                raise HTTPException(status_code=400, detail="Only Excel files are allowed")
+
+            if file.content_type and file.content_type not in allowed_content_types:
+                raise HTTPException(status_code=400, detail="Invalid Excel content type")
+
+            input_path = Path(INPUT_DIR)
+            input_path.mkdir(parents=True, exist_ok=True)
+
+            file_path = input_path / filename
+            if file_path.exists():
+                raise HTTPException(status_code=409, detail="File already exists")
+
+            try:
+                contents = await file.read()
+                if len(contents) > max_upload_bytes:
+                    raise HTTPException(status_code=413, detail="File is too large")
+
+                if suffix == ".xlsx" and not contents.startswith(b"PK"):
+                    raise HTTPException(status_code=400, detail="Invalid XLSX file signature")
+                if suffix == ".xls" and not contents.startswith(b"\xd0\xcf\x11\xe0"):
+                    raise HTTPException(status_code=400, detail="Invalid XLS file signature")
+
+                with open(file_path, 'wb') as f:
+                    f.write(contents)
+
+                return {"message": "File uploaded successfully", "path": str(file_path)}
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+    else:
+        @app.post(
+            "/files/upload",
+            tags=["Files"],
+            dependencies=[
+                Depends(check_rate_limit),
+                Depends(require_permission(Permission.EXPORT_DATA)),
+            ],
+        )
+        async def upload_file_unavailable():
+            raise HTTPException(
+                status_code=503,
+                detail="File upload requires python-multipart. Install dependencies from requirements.txt.",
+            )
     
     @app.get("/files/download/{file_path:path}", tags=["Files"])
     async def download_file(file_path: str):
@@ -393,7 +461,14 @@ if FASTAPI_AVAILABLE:
     
     # ============ REPORT ENDPOINTS ============
     
-    @app.post("/reports/generate", tags=["Reports"])
+    @app.post(
+        "/reports/generate",
+        tags=["Reports"],
+        dependencies=[
+            Depends(check_rate_limit),
+            Depends(require_permission(Permission.EXPORT_DATA)),
+        ],
+    )
     async def generate_report(request: ReportRequest, background_tasks: BackgroundTasks):
         """
         Generate a report for the specified date.
@@ -401,9 +476,45 @@ if FASTAPI_AVAILABLE:
         Supports formats: excel, pdf, json
         """
         try:
-            from core_logic import load_results
+            from core_logic import load_result_metadata, load_results
             from reports.report_generator import create_reports
             from config import OUTPUT_DIR
+
+            metadata = load_result_metadata(Path(OUTPUT_DIR))
+
+            if request.format == "json":
+                if not metadata:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No reconciliation result metadata found. Run /reconcile first."
+                    )
+
+                output_path = Path(OUTPUT_DIR) / f"Report_{request.date.replace('.', '')}"
+                output_path.mkdir(parents=True, exist_ok=True)
+                json_path = output_path / "summary.json"
+                import json
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(metadata.get("summary", []), f, ensure_ascii=False, indent=2)
+
+                return {
+                    "success": True,
+                    "message": "Report generated",
+                    "path": str(json_path)
+                }
+
+            app_mode = os.getenv("APP_MODE", "").lower()
+            if app_mode in {"api-server", "api_server", "server"}:
+                report_folder = Path(metadata["report_folder"]) if metadata and metadata.get("report_folder") else None
+                if report_folder and report_folder.exists():
+                    return {
+                        "success": True,
+                        "message": "Existing report folder returned; pickle loading is disabled in server mode",
+                        "path": str(report_folder),
+                    }
+                raise HTTPException(
+                    status_code=404,
+                    detail="No report folder found. Run /reconcile first."
+                )
             
             # Tải kết quả đã lưu
             results = load_results(Path(OUTPUT_DIR))
@@ -421,15 +532,6 @@ if FASTAPI_AVAILABLE:
                 results["report_folder"] = output_path
                 create_reports(results)
                 report_path = output_path
-            elif request.format == "json":
-                import json
-                summary_df = results.get("summary_df")
-                if summary_df is not None:
-                    json_path = output_path / "summary.json"
-                    summary_df.to_json(json_path, orient="records", force_ascii=False, indent=2)
-                    report_path = json_path
-                else:
-                    report_path = None
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
             
@@ -472,7 +574,14 @@ if FASTAPI_AVAILABLE:
     
     # ============ AUDIT ENDPOINTS ============
     
-    @app.get("/audit/logs", tags=["Audit"])
+    @app.get(
+        "/audit/logs",
+        tags=["Audit"],
+        dependencies=[
+            Depends(check_rate_limit),
+            Depends(require_permission(Permission.VIEW_AUDIT)),
+        ],
+    )
     async def get_audit_logs(
         limit: int = Query(100, ge=1, le=1000),
         action: Optional[str] = Query(None, description="Filter by action type"),
@@ -499,7 +608,14 @@ if FASTAPI_AVAILABLE:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     
-    @app.get("/audit/statistics", tags=["Audit"])
+    @app.get(
+        "/audit/statistics",
+        tags=["Audit"],
+        dependencies=[
+            Depends(check_rate_limit),
+            Depends(require_permission(Permission.VIEW_AUDIT)),
+        ],
+    )
     async def get_audit_statistics(days: int = Query(30, ge=1, le=365)):
         """Get audit statistics for the specified period."""
         try:

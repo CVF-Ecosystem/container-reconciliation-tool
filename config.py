@@ -67,7 +67,11 @@ def load_mapping_config():
         "ton_cu": [[Col.CONTAINER], [Col.OPERATOR]],
         "ton_moi": [[Col.CONTAINER], [Col.OPERATOR]]
     }
-    default_operators = {}
+    default_operators = {
+        "VIMC Lines": ["VMC"],
+        "Vinafco": ["VFC"],
+        "Vosco": ["VOC", "VOSCO"],
+    }
     
     if not MAPPING_CONFIG_FILE.exists():
         logging.warning(f"Config file not found: {MAPPING_CONFIG_FILE}. Using defaults.")

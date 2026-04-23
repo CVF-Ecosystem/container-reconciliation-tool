@@ -1,6 +1,9 @@
 # File: core_logic.py — @2026 v1.0
 import os
+import json
 import pickle
+import sqlite3
+import tempfile
 from datetime import datetime
 import logging
 from pathlib import Path
@@ -34,20 +37,144 @@ from utils.history_db import HistoryDatabase
 
 # --- HÀM LƯU VÀ TẢI KẾT QUẢ TRUNG GIAN ---
 RESULTS_FILENAME = "latest_results.pkl"
+RESULTS_METADATA_FILENAME = "latest_results.json"
+RESULTS_DB_FILENAME = "latest_results.sqlite3"
+RESULTS_SCHEMA_VERSION = 1
+
+
+def _atomic_write_bytes(path: Path, data: bytes):
+    """Write bytes atomically to avoid corrupt shared state on interruption."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(delete=False, dir=path.parent, prefix=f".{path.name}.", suffix=".tmp") as tmp:
+        tmp.write(data)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
+def _atomic_write_text(path: Path, text: str):
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _result_metadata(results: Dict[str, Any], checksum: str | None = None) -> Dict[str, Any]:
+    """Create a schema-versioned, JSON-safe snapshot for API/server mode."""
+    summary_df = results.get("summary_df")
+    if isinstance(summary_df, pd.DataFrame):
+        summary_records = summary_df.to_dict(orient="records")
+    else:
+        summary_records = []
+
+    report_folder = results.get("report_folder")
+    run_timestamp = results.get("run_timestamp")
+
+    return {
+        "schema_version": RESULTS_SCHEMA_VERSION,
+        "saved_at": datetime.now().isoformat(),
+        "run_timestamp": run_timestamp.isoformat() if hasattr(run_timestamp, "isoformat") else str(run_timestamp or ""),
+        "report_folder": str(report_folder) if report_folder else None,
+        "summary": summary_records,
+        "quality_warnings": results.get("quality_warnings", []),
+        "checksum_sha256": checksum,
+    }
+
+
+def _save_result_record(metadata: Dict[str, Any], output_dir: Path):
+    db_path = output_dir / RESULTS_DB_FILENAME
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS latest_results (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                schema_version INTEGER NOT NULL,
+                saved_at TEXT NOT NULL,
+                run_timestamp TEXT,
+                report_folder TEXT,
+                summary_json TEXT NOT NULL,
+                checksum_sha256 TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO latest_results (
+                id, schema_version, saved_at, run_timestamp,
+                report_folder, summary_json, checksum_sha256
+            )
+            VALUES (1, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                metadata["schema_version"],
+                metadata["saved_at"],
+                metadata.get("run_timestamp"),
+                metadata.get("report_folder"),
+                json.dumps(metadata.get("summary", []), ensure_ascii=False),
+                metadata.get("checksum_sha256"),
+            ),
+        )
+        conn.commit()
+
+
+def load_result_metadata(output_dir: Path) -> Dict[str, Any] | None:
+    """Load the JSON/SQLite latest-result metadata without unpickling arbitrary objects."""
+    metadata_path = output_dir / RESULTS_METADATA_FILENAME
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Lỗi đọc metadata kết quả: {e}")
+
+    db_path = output_dir / RESULTS_DB_FILENAME
+    if not db_path.exists():
+        return None
+
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(
+                """
+                SELECT schema_version, saved_at, run_timestamp, report_folder,
+                       summary_json, checksum_sha256
+                FROM latest_results WHERE id = 1
+                """
+            ).fetchone()
+        if not row:
+            return None
+        schema_version, saved_at, run_timestamp, report_folder, summary_json, checksum = row
+        return {
+            "schema_version": schema_version,
+            "saved_at": saved_at,
+            "run_timestamp": run_timestamp,
+            "report_folder": report_folder,
+            "summary": json.loads(summary_json),
+            "checksum_sha256": checksum,
+        }
+    except Exception as e:
+        logging.error(f"Lỗi đọc database metadata kết quả: {e}")
+        return None
+
 
 def save_results(results: Dict[str, Any], output_dir: Path):
-    """Lưu dictionary kết quả ra file pickle."""
+    """Lưu kết quả: pickle legacy cho desktop, JSON/SQLite metadata cho API/server."""
     results_path = output_dir / RESULTS_FILENAME
     try:
-        with open(results_path, 'wb') as f:
-            pickle.dump(results, f)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        payload = pickle.dumps(results)
+        checksum = __import__("hashlib").sha256(payload).hexdigest()
+        _atomic_write_bytes(results_path, payload)
+
+        metadata = _result_metadata(results, checksum=checksum)
+        _atomic_write_text(
+            output_dir / RESULTS_METADATA_FILENAME,
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+        )
+        _save_result_record(metadata, output_dir)
         logging.info(f"Đã lưu kết quả trung gian vào: {results_path}")
     except (IOError, OSError) as e:
         logging.error(f"Lỗi khi lưu kết quả trung gian: {e}")
     except Exception as e:
         logging.error(f"Lỗi không xác định khi lưu kết quả: {e}")
 
-def load_results(output_dir: Path) -> Dict[str, Any] | None:
+def load_results(output_dir: Path, allow_pickle: bool | None = None) -> Dict[str, Any] | None:
     """
     Load previously saved reconciliation results from a pickle file.
     
@@ -57,6 +184,14 @@ def load_results(output_dir: Path) -> Dict[str, Any] | None:
     Returns:
         Dictionary containing all reconciliation results, or None if file not found.
     """
+    if allow_pickle is None:
+        app_mode = os.getenv("APP_MODE", "").lower()
+        allow_pickle = app_mode not in {"api-server", "api_server", "server"} and os.getenv("DISABLE_PICKLE_STATE") != "1"
+
+    if not allow_pickle:
+        logging.warning("Pickle result loading is disabled in server mode.")
+        return None
+
     results_path = output_dir / RESULTS_FILENAME
     if not results_path.exists():
         logging.warning("Không tìm thấy file kết quả trung gian (latest_results.pkl).")
@@ -221,6 +356,20 @@ def run_full_reconciliation_process(
         ... )
         >>> print(f"Reports saved to: {report_path}")
     """
+    from core.pipeline import PipelineContext, ReconciliationPipeline
+
+    ctx = PipelineContext(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        update_status=update_status,
+        update_progress=update_progress,
+        confirm_missing_ton_cu=confirm_missing_ton_cu,
+    )
+    result_ctx = ReconciliationPipeline().run(ctx)
+    if result_ctx.report_folder is None:
+        raise ReconciliationError("Pipeline completed without a report folder.")
+    return result_ctx.report_folder
+
     def _update_status(message):
         logging.info(message)
         if update_status:

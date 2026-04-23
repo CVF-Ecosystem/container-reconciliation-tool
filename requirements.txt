@@ -32,9 +32,9 @@ schedule>=1.2.0            # Task scheduler (scheduler.py, utils/scheduler.py)
 # === REPORTS ===
 reportlab>=4.0.0           # PDF generation (reports/pdf_generator.py)
 
-# === ASYNC TASK QUEUE ===
-# celery>=5.3.0            # Async task queue (uncomment for production)
-# redis>=5.0.0             # Redis backend for Celery (uncomment for production)
+# === ASYNC TASK QUEUE (OPTIONAL / ENTERPRISE API ONLY) ===
+# celery>=5.3.0            # Async task queue for multi-process API/server mode
+# redis>=5.0.0             # Redis backend for Celery
 
 # === OBSERVABILITY ===
 # opentelemetry-api>=1.20.0                    # Tracing API

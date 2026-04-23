@@ -281,13 +281,18 @@ F1             Show this help
         self.clear_data_button.pack(side=tk.LEFT, padx=5)
         
         # Log frame
-        self.log_frame = ttkb.LabelFrame(main_frame, text="Activity Log", padding=10)
+        self.log_frame = ttkb.LabelFrame(main_frame, text="Activity Log")
         self.log_frame.grid(row=3, column=0, sticky="nsew")
         self.log_frame.grid_remove()
         self.log_frame.columnconfigure(0, weight=1)
         self.log_frame.rowconfigure(0, weight=1)
+
+        self.log_inner_frame = ttkb.Frame(self.log_frame, padding=10)
+        self.log_inner_frame.grid(row=0, column=0, sticky="nsew")
+        self.log_inner_frame.columnconfigure(0, weight=1)
+        self.log_inner_frame.rowconfigure(0, weight=1)
         
-        self.log_text_widget = scrolledtext.ScrolledText(self.log_frame, wrap=tk.WORD, font=("Consolas", 9))
+        self.log_text_widget = scrolledtext.ScrolledText(self.log_inner_frame, wrap=tk.WORD, font=("Consolas", 9))
         self.log_text_widget.grid(row=0, column=0, sticky="nsew")
         self.log_text_widget.config(state=tk.DISABLED)
         

@@ -199,6 +199,71 @@ def run_all_health_checks(input_dir: Path, output_dir: Path) -> Tuple[bool, List
     return all_passed, results
 
 
+def run_health_checks(input_dir: Path | None = None, output_dir: Path | None = None) -> Dict[str, bool]:
+    """
+    Run the canonical health check contract used by API, Docker, and tests.
+
+    Returns a flat mapping so callers can decide how to expose status without
+    relying on localized display names from HealthCheckResult.
+    """
+    if input_dir is None or output_dir is None:
+        try:
+            import config
+            input_dir = input_dir or config.INPUT_DIR
+            output_dir = output_dir or config.OUTPUT_DIR
+        except Exception as exc:
+            logging.error(f"[Health] Cannot load config: {exc}")
+            return {
+                "api": True,
+                "config": False,
+                "input_dir": False,
+                "output_dir": False,
+                "disk_space": False,
+                "database": False,
+                "write_permission": False,
+                "python_modules": False,
+            }
+
+    checks: Dict[str, bool] = {"api": True, "config": True}
+    try:
+        all_passed, results = run_all_health_checks(Path(input_dir), Path(output_dir))
+    except Exception as exc:
+        logging.error(f"[Health] Health checks failed unexpectedly: {exc}", exc_info=True)
+        return {
+            "api": True,
+            "config": True,
+            "input_dir": False,
+            "output_dir": False,
+            "disk_space": False,
+            "database": False,
+            "write_permission": False,
+            "python_modules": False,
+        }
+
+    name_map = {
+        "Directory: data_input": "input_dir",
+        "Directory: data_output": "output_dir",
+        f"Directory: {Path(input_dir).name}": "input_dir",
+        f"Directory: {Path(output_dir).name}": "output_dir",
+        "Disk Space": "disk_space",
+        "Database": "database",
+        "Write Permission": "write_permission",
+        "Python Modules": "python_modules",
+    }
+    for result in results:
+        key = name_map.get(result.name, result.name.lower().replace(" ", "_").replace(":", ""))
+        checks[key] = result.passed
+
+    checks["critical"] = all_passed
+    return checks
+
+
+def run_health_check() -> None:
+    """CLI/Docker entry point. Exits non-zero when any critical check fails."""
+    checks = run_health_checks()
+    raise SystemExit(0 if checks.get("critical", all(checks.values())) else 1)
+
+
 def format_health_report(results: List[HealthCheckResult]) -> str:
     """Format health check results as string."""
     lines = ["=" * 50, "HEALTH CHECK REPORT", "=" * 50]

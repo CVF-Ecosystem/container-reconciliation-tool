@@ -58,6 +58,20 @@ def _get_default_config() -> Dict[str, Any]:
                 "enabled": True,
                 "template": "vimc",
                 "max_attachment_size_mb": 20
+            },
+            "Vinafco": {
+                "recipients": ["vinafco.ops@example.com"],
+                "cc": [],
+                "enabled": True,
+                "template": "default",
+                "max_attachment_size_mb": 20
+            },
+            "Vosco": {
+                "recipients": ["vosco.ops@example.com"],
+                "cc": [],
+                "enabled": True,
+                "template": "default",
+                "max_attachment_size_mb": 20
             }
         }
     }

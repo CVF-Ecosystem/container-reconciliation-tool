@@ -71,9 +71,9 @@ USER appuser
 # 8501 - Streamlit Dashboard (optional)
 EXPOSE 8000 8501
 
-# Health check
+# Health check (no curl dependency required)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "from utils.health_check import run_health_check; run_health_check()" || exit 1
+    CMD python -c "import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)); sys.exit(0 if data.get('status') == 'healthy' else 1)"
 
 # Default command - Run API server
 CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]

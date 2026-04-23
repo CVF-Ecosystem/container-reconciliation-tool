@@ -1,5 +1,5 @@
 # Docker Compose for Container Inventory Reconciliation Tool V5.4
-# Production-ready multi-service deployment
+# Default mode is single-node API + dashboard. Celery/Redis are opt-in via profile.
 
 version: '3.9'
 
@@ -17,28 +17,29 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - APP_ENV=production
+      - APP_ENV=${APP_ENV:-development}
+      - APP_MODE=api-server
       - LOG_LEVEL=INFO
       - DATABASE_URL=sqlite:///./data/app.db
-      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-local-dev-jwt-secret-change-me}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-}
     volumes:
       - ./data_input:/app/data_input:ro
       - ./data_output:/app/data_output
       - ./logs:/app/logs
       - ./email_config.json:/app/email_config.json:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)); sys.exit(0 if data.get('status') == 'healthy' else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
     networks:
       - reconciliation-network
-    depends_on:
-      - redis
 
   # ==========================================================================
-  # Worker Service - Background task processing
+  # Worker Service - Celery background task processing (opt-in)
   # ==========================================================================
   worker:
     build:
@@ -47,11 +48,16 @@ services:
       target: production
     container_name: reconciliation-worker
     restart: unless-stopped
-    command: python -m utils.scheduler
+    command: celery -A utils.task_queue.celery_app worker --loglevel=INFO
+    profiles:
+      - celery
     environment:
-      - APP_ENV=production
+      - APP_ENV=${APP_ENV:-development}
+      - APP_MODE=api-server
       - LOG_LEVEL=INFO
-      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-local-dev-jwt-secret-change-me}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     volumes:
       - ./data_input:/app/data_input:ro
       - ./data_output:/app/data_output
@@ -87,12 +93,14 @@ services:
       - api
 
   # ==========================================================================
-  # Redis - Cache and Message Queue
+  # Redis - Celery broker/result backend (opt-in)
   # ==========================================================================
   redis:
     image: redis:7-alpine
     container_name: reconciliation-redis
     restart: unless-stopped
+    profiles:
+      - celery
     ports:
       - "6379:6379"
     volumes:
@@ -145,8 +153,11 @@ volumes:
 # =============================================================================
 # USAGE:
 # =============================================================================
-# Development:
+# Single-node API + dashboard:
 #   docker-compose up -d api dashboard
+#
+# Celery + Redis mode:
+#   CELERY_BROKER_URL=redis://redis:6379/0 docker-compose --profile celery up -d api worker redis
 #
 # Production with Nginx:
 #   docker-compose --profile production up -d
@@ -157,6 +168,6 @@ volumes:
 # View logs:
 #   docker-compose logs -f api
 #
-# Scale workers:
-#   docker-compose up -d --scale worker=3
+# Scale Celery workers:
+#   docker-compose --profile celery up -d --scale worker=3
 # =============================================================================

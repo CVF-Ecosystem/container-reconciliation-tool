@@ -12,9 +12,12 @@ Features:
 """
 
 import hashlib
+import os
 import secrets
 import sqlite3
 import logging
+import base64
+import hmac
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
@@ -213,12 +216,7 @@ class TokenManager:
         if JWT_AVAILABLE:
             return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
         else:
-            # Simple token fallback
-            token_data = json.dumps(payload, default=str)
-            signature = hashlib.sha256(
-                (token_data + self.secret_key).encode()
-            ).hexdigest()[:16]
-            return f"{secrets.token_urlsafe(32)}.{signature}"
+            return self._encode_simple_token(payload)
     
     def create_refresh_token(self, user: User) -> str:
         """Create JWT refresh token."""
@@ -236,7 +234,7 @@ class TokenManager:
         if JWT_AVAILABLE:
             return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
         else:
-            return secrets.token_urlsafe(64)
+            return self._encode_simple_token(payload)
     
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode JWT token."""
@@ -258,9 +256,31 @@ class TokenManager:
                 logging.warning(f"Invalid token: {e}")
                 return None
         else:
-            # Simple token - just check if not revoked
-            # In production, use proper JWT
-            return {"sub": "unknown", "role": "viewer"}
+            return self._decode_simple_token(token)
+
+    def _encode_simple_token(self, payload: Dict[str, Any]) -> str:
+        token_data = json.dumps(payload, default=str, separators=(",", ":")).encode("utf-8")
+        body = base64.urlsafe_b64encode(token_data).decode("ascii").rstrip("=")
+        signature = hmac.new(self.secret_key.encode("utf-8"), body.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"{body}.{signature}"
+
+    def _decode_simple_token(self, token: str) -> Optional[Dict[str, Any]]:
+        try:
+            body, signature = token.rsplit(".", 1)
+            expected = hmac.new(self.secret_key.encode("utf-8"), body.encode("ascii"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(signature, expected):
+                return None
+
+            padded = body + "=" * (-len(body) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+            exp = payload.get("exp")
+            if exp and datetime.fromisoformat(str(exp)) < datetime.utcnow():
+                logging.warning("Token expired")
+                return None
+            return payload
+        except Exception as e:
+            logging.warning(f"Invalid fallback token: {e}")
+            return None
     
     def _init_revoked_db(self):
         """Khởi tạo bảng revoked_tokens trong SQLite."""
@@ -351,6 +371,7 @@ class UserStore:
                             is_active=user_data.get("is_active", True),
                             created_at=datetime.fromisoformat(user_data["created_at"]),
                             last_login=datetime.fromisoformat(user_data["last_login"]) if user_data.get("last_login") else None,
+                            metadata=user_data.get("metadata", {}),
                         )
                         self._users[user.id] = user
                 logging.info(f"Loaded {len(self._users)} users from storage")
@@ -371,6 +392,7 @@ class UserStore:
                     "is_active": u.is_active,
                     "created_at": u.created_at.isoformat(),
                     "last_login": u.last_login.isoformat() if u.last_login else None,
+                    "metadata": u.metadata,
                 }
                 for u in self._users.values()
             ]
@@ -565,7 +587,16 @@ class AuthManager:
         access_token_expire_minutes: int = 30,
         refresh_token_expire_days: int = 7
     ):
-        self.secret_key = secret_key or secrets.token_hex(32)
+        configured_secret = secret_key or os.getenv("JWT_SECRET_KEY") or os.getenv("AUTH_SECRET_KEY")
+        server_mode = os.getenv("APP_MODE", "").lower() in {"api-server", "api_server", "server"}
+        production_mode = os.getenv("APP_ENV", "").lower() == "production"
+        require_stable_secret = os.getenv("REQUIRE_STABLE_JWT_SECRET", "").lower() in {"1", "true", "yes"}
+        if not configured_secret and (server_mode or production_mode or require_stable_secret):
+            raise RuntimeError(
+                "JWT_SECRET_KEY is required in server/production mode. "
+                "Set JWT_SECRET_KEY to a stable secret so tokens survive process restarts."
+            )
+        self.secret_key = configured_secret or secrets.token_hex(32)
         self.user_store = user_store or UserStore()
         self.token_manager = TokenManager(
             secret_key=self.secret_key,

@@ -29,12 +29,12 @@ jobs:
       
       - name: Install lint dependencies
         run: |
+          pip install -r requirements.txt
           pip install ruff mypy
       
       - name: Run Ruff linter
         run: |
-          ruff check . --output-format=github
-        continue-on-error: true  # Don't fail on lint warnings
+          ruff check . --select=E9,F63,F7,F82 --output-format=github
       
       - name: Run type checking (mypy)
         run: |
@@ -64,10 +64,9 @@ jobs:
         run: |
           bandit -r . -ll \
             --exclude ./tests,./gui,./BI_Dashboard \
-            -f json -o bandit-report.json || true
+            -f json -o bandit-report.json
           bandit -r . -ll \
             --exclude ./tests,./gui,./BI_Dashboard
-        continue-on-error: true
       
       - name: Check for known vulnerabilities
         run: |
@@ -103,10 +102,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pandas openpyxl XlsxWriter unidecode
-          pip install pytest pytest-cov pytest-xdist
-          # Optional deps for testing
-          pip install PyJWT bcrypt || true
+          pip install -r requirements.txt
       
       - name: Run tests with coverage
         run: |
@@ -118,10 +114,10 @@ jobs:
             --cov-report=term-missing \
             --cov-omit="tests/*,gui/*,BI_Dashboard/*" \
             -x \
-            --ignore=tests/test_api_server.py \
             -n auto
         env:
           ADMIN_DEFAULT_PASSWORD: test_admin_password_ci
+          JWT_SECRET_KEY: test_jwt_secret_ci
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -132,8 +128,7 @@ jobs:
       
       - name: Coverage threshold check
         run: |
-          coverage report --fail-under=60 || echo "Coverage below 60%, please add tests"
-        continue-on-error: true
+          coverage report --fail-under=60
 
   # ============ INTEGRATION TESTS ============
   integration:
@@ -152,7 +147,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install pandas openpyxl XlsxWriter unidecode pytest
+          pip install -r requirements.txt
       
       - name: Run integration tests
         run: |
@@ -160,7 +155,7 @@ jobs:
             --tb=short -v
         env:
           ADMIN_DEFAULT_PASSWORD: test_admin_password_ci
-        continue-on-error: true
+          JWT_SECRET_KEY: test_jwt_secret_ci
 
   # ============ BUILD CHECK ============
   build:
@@ -179,7 +174,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install pandas openpyxl XlsxWriter unidecode
+          pip install -r requirements.txt
       
       - name: Verify imports work
         run: |
@@ -198,24 +193,3 @@ jobs:
             | xargs python -m py_compile
           echo "All Python files compile successfully"
 
-  # ============ DOCKER BUILD ============
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          tags: container-reconciliation:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

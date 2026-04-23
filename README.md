@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Công cụ đối soát tồn kho container tự động cho cảng biển. Hỗ trợ GUI desktop, web dashboard (Streamlit), và REST API.
+Công cụ đối soát tồn kho container tự động cho cảng biển. Chế độ khuyến nghị cho vận hành nội bộ là Desktop GUI hoặc Streamlit single-node; REST API chỉ bật khi thật sự cần tích hợp hệ thống khác.
 
 ---
 
@@ -143,11 +143,14 @@ cp .env.example .env
 | Biến | Mô tả | Mặc định |
 |------|-------|---------|
 | `ADMIN_DEFAULT_PASSWORD` | Password admin lần đầu | Random (xem log) |
+| `JWT_SECRET_KEY` | Secret ky JWT cho API/server mode | Bat buoc khi `APP_MODE=api-server` hoac `APP_ENV=production` |
+| `APP_MODE` | `desktop`, `streamlit-internal`, hoac `api-server` | - |
+| `MAX_UPLOAD_BYTES` | Gioi han upload API | `20971520` |
 | `APP_EMAIL_USER` | Email gửi báo cáo | - |
 | `APP_EMAIL_PASSWORD` | Password email | - |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | `http://localhost:8501` |
 | `DATABASE_URL` | SQLAlchemy URL | `sqlite:///./data/app.db` |
-| `CELERY_BROKER_URL` | Redis URL cho Celery | - (dùng ThreadPool) |
+| `CELERY_BROKER_URL` | Redis URL cho Celery | Không dùng cho internal mode |
 | `VAULT_ADDR` | HashiCorp Vault URL | - |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry endpoint | - |
 
@@ -171,19 +174,24 @@ streamlit run app.py  # pages/ được tự động load
 
 ### REST API
 ```bash
+set APP_MODE=api-server
+set JWT_SECRET_KEY=change-this-to-a-long-random-secret
 uvicorn api.server:app --reload --port 8000
 # Docs: http://localhost:8000/docs
 ```
+
+API server mode bao ve cac endpoint ghi/chay job/audit: `/reconcile`, `/files/upload`, `/reports/generate`, `/audit/logs`, `/audit/statistics`. Dang nhap bang `POST /auth/login`, sau do gui `Authorization: Bearer <token>` hoac `X-API-Key`.
 
 ### CLI (Backend only)
 ```bash
 python main.py
 ```
 
-### Docker
-```bash
-docker-compose up -d
-```
+### Docker / Enterprise API
+
+Khong can Docker cho desktop GUI, CLI local hoac Streamlit noi bo single-node. Dockerfile va compose chi duoc giu lai cho kha nang enterprise/API sau nay, khong phai luong van hanh mac dinh.
+
+Neu sau nay deploy API multi-replica, cai them `requirements-enterprise.txt`, bat Celery + Redis va dung shared database/object storage. Khong scale API horizontal khi van dung in-memory queue.
 
 ---
 
@@ -271,11 +279,32 @@ pytest tests/test_api_server.py -v
 ## 🔒 Bảo Mật
 
 - **Passwords**: Đọc từ env vars, không hardcode
-- **JWT tokens**: Revocation list persist vào SQLite
+- **JWT tokens**: `JWT_SECRET_KEY` bat buoc trong server/production mode; revocation list persist vào SQLite
 - **API keys**: Random token 32 bytes, hash SHA256 trước khi lưu
 - **CORS**: Configurable qua `ALLOWED_ORIGINS` env var
 - **Path traversal**: Download endpoint validate path trong OUTPUT_DIR
+- **Uploads**: Sanitize filename, validate extension/MIME/signature, size limit, khong overwrite mac dinh
 - **Secrets**: Hỗ trợ HashiCorp Vault, AWS Secrets Manager, env vars
+
+## 🧭 Runtime Modes
+
+| Mode | Entry point | State/queue | Ghi chu |
+|------|-------------|-------------|---------|
+| `desktop` | `python app_gui.py` hoac `python main.py` | Local files, pickle legacy + JSON/SQLite metadata | Khuyen nghi cho tool noi bo |
+| `streamlit-internal` | `streamlit run app.py` | Doc latest result local | Khuyen nghi cho dashboard noi bo single-node |
+| `api-server` | `uvicorn api.server:app` | Auth bat buoc cho endpoint write/job/audit; khong load pickle khi `APP_MODE=api-server` | Chi bat khi can tich hop REST API |
+
+## Internal Operation
+
+1. Cai dependency: `pip install -r requirements.txt`.
+2. Chay GUI: `python app_gui.py`, hoac chay backend: `python main.py`.
+3. Neu dung dashboard: `streamlit run app.py`.
+4. Backup dinh ky cac thu muc `data_input`, `data_output`, `logs` va file cau hinh email neu co.
+5. Cleanup output/log cu theo chinh sach noi bo; khong can Docker, Redis, Celery, PostgreSQL, K8s cho mode nay.
+
+`core.pipeline.ReconciliationPipeline` la orchestration path chinh. `core_logic.run_full_reconciliation_process()` chi la wrapper de GUI/CLI/legacy code cung di qua pipeline.
+
+Business rules critical duoc catalog tai [BUSINESS_RULE_CATALOG.md](BUSINESS_RULE_CATALOG.md).
 
 ---
 

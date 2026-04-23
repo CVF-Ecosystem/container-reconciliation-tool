@@ -8,25 +8,21 @@ Helps discover edge cases that manual tests might miss.
 Requires: pip install hypothesis
 """
 
-import pytest
 import sys
 from pathlib import Path
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
-    from hypothesis import given, settings, assume, HealthCheck
-    from hypothesis import strategies as st
-    from hypothesis.extra.pandas import column, data_frames, range_indexes
-    HYPOTHESIS_AVAILABLE = True
-except ImportError:
-    HYPOTHESIS_AVAILABLE = False
-
-pytestmark = pytest.mark.skipif(
-    not HYPOTHESIS_AVAILABLE,
-    reason="Hypothesis not installed. Run: pip install hypothesis"
+hypothesis = pytest.importorskip(
+    "hypothesis",
+    reason="Hypothesis not installed. Run: pip install hypothesis",
 )
+
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+from hypothesis.extra.pandas import column, data_frames, range_indexes
 
 from config import Col, DEFAULT_TEU_FACTOR
 from utils.display_helpers import calculate_teus, prepare_df_for_display, add_stt_column

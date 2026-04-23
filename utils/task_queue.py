@@ -241,6 +241,54 @@ except ImportError:
     CELERY_AVAILABLE = False
 
 
+def _create_celery_app() -> "Celery":
+    broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
+
+    app = Celery(
+        "reconciliation",
+        broker=broker_url,
+        backend=result_backend
+    )
+    app.conf.update(
+        task_serializer="json",
+        result_serializer="json",
+        accept_content=["json"],
+        timezone="UTC",
+        enable_utc=True,
+        task_track_started=True,
+        task_acks_late=True,
+    )
+    return app
+
+
+celery_app = _create_celery_app() if CELERY_AVAILABLE else None
+
+
+if CELERY_AVAILABLE:
+    @celery_app.task(bind=True, name="reconciliation.run")
+    def run_reconciliation_task(self, input_dir_str: str, output_dir_str: str):
+        """Celery task for running reconciliation."""
+        from core.pipeline import ReconciliationPipeline, PipelineContext
+
+        def update_progress(pct: int):
+            self.update_state(
+                state="PROGRESS",
+                meta={"progress": pct}
+            )
+
+        ctx = PipelineContext(
+            input_dir=Path(input_dir_str),
+            output_dir=Path(output_dir_str),
+            update_progress=update_progress
+        )
+
+        pipeline = ReconciliationPipeline()
+        result_ctx = pipeline.run(ctx)
+
+        return {"report_folder": str(result_ctx.report_folder)}
+
+
 class CeleryTaskQueue:
     """
     Celery-based task queue for production deployments.
@@ -256,54 +304,12 @@ class CeleryTaskQueue:
     def __init__(self):
         if not CELERY_AVAILABLE:
             raise ImportError("Celery not installed. Run: pip install celery redis")
-        
-        broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-        result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
-        
-        self._app = Celery(
-            "reconciliation",
-            broker=broker_url,
-            backend=result_backend
-        )
-        
-        self._app.conf.update(
-            task_serializer="json",
-            result_serializer="json",
-            accept_content=["json"],
-            timezone="UTC",
-            enable_utc=True,
-            task_track_started=True,
-            task_acks_late=True,
-        )
-        
-        # Register tasks
-        self._register_tasks()
+
+        self._app = celery_app
+        self._reconciliation_task = run_reconciliation_task
     
     def _register_tasks(self):
         """Register Celery tasks."""
-        
-        @self._app.task(bind=True, name="reconciliation.run")
-        def run_reconciliation_task(self, input_dir_str: str, output_dir_str: str):
-            """Celery task for running reconciliation."""
-            from core.pipeline import ReconciliationPipeline, PipelineContext
-            
-            def update_progress(pct: int):
-                self.update_state(
-                    state="PROGRESS",
-                    meta={"progress": pct}
-                )
-            
-            ctx = PipelineContext(
-                input_dir=Path(input_dir_str),
-                output_dir=Path(output_dir_str),
-                update_progress=update_progress
-            )
-            
-            pipeline = ReconciliationPipeline()
-            result_ctx = pipeline.run(ctx)
-            
-            return {"report_folder": str(result_ctx.report_folder)}
-        
         self._reconciliation_task = run_reconciliation_task
     
     def submit_reconciliation(self, input_dir: Path, output_dir: Path, **kwargs) -> str:
@@ -348,7 +354,9 @@ def create_task_queue() -> InMemoryTaskQueue:
     
     Uses Celery if CELERY_BROKER_URL is set, otherwise InMemoryTaskQueue.
     """
-    if os.getenv("CELERY_BROKER_URL") and CELERY_AVAILABLE:
+    if os.getenv("CELERY_BROKER_URL"):
+        if not CELERY_AVAILABLE:
+            raise ImportError("CELERY_BROKER_URL is set but Celery is not installed. Install celery and redis.")
         logging.info("Using Celery task queue")
         return CeleryTaskQueue()
     else:

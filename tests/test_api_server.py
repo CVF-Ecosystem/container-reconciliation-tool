@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 import tempfile
 import os
+import importlib.util
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,9 +26,31 @@ pytestmark = pytest.mark.skipif(
     reason="FastAPI not installed. Run: pip install fastapi uvicorn httpx"
 )
 
+MULTIPART_AVAILABLE = bool(
+    importlib.util.find_spec("python_multipart") or importlib.util.find_spec("multipart")
+)
+
 
 @pytest.fixture
-def client():
+def auth_manager(tmp_path, monkeypatch):
+    """Initialize isolated auth storage for API tests."""
+    monkeypatch.setenv("ADMIN_DEFAULT_PASSWORD", "test_admin_password_123")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret")
+    from utils.auth import init_auth
+    return init_auth(
+        secret_key="test-jwt-secret",
+        user_storage_path=tmp_path / "users.json",
+    )
+
+
+@pytest.fixture
+def auth_headers(auth_manager):
+    tokens = auth_manager.login("admin", "test_admin_password_123")
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+@pytest.fixture
+def client(auth_manager):
     """Create test client for the API."""
     from api.server import app
     return TestClient(app)
@@ -115,34 +138,96 @@ class TestDownloadEndpoint:
 
 class TestReconcileEndpoint:
     """Tests for /reconcile endpoint."""
+
+    def test_reconcile_requires_auth(self, client):
+        """Reconcile is a write/job endpoint and must not be public."""
+        response = client.post("/reconcile", json={"date": "27.02.2026"})
+        assert response.status_code == 401
     
-    def test_reconcile_with_mock(self, client):
-        """Reconcile endpoint should call run_full_reconciliation_process."""
-        mock_path = Path("/tmp/test_report")
+    def test_reconcile_with_mock(self, client, auth_headers):
+        """Reconcile endpoint should submit a task to the queue."""
+        mock_queue = MagicMock()
+        mock_queue.submit_reconciliation.return_value = "task-123"
         
-        with patch('core_logic.run_full_reconciliation_process', return_value=mock_path) as mock_reconcile:
-            with patch('core_logic.load_results', return_value=None):
-                response = client.post("/reconcile", json={
-                    "date": "27.02.2026",
-                    "time_slot": None,
-                    "include_cfs": True
-                })
-                
-                # Should call the reconciliation function
-                assert mock_reconcile.called
+        with patch('utils.task_queue.get_task_queue', return_value=mock_queue):
+            response = client.post("/reconcile", headers=auth_headers, json={
+                "date": "27.02.2026",
+                "time_slot": None,
+                "include_cfs": True
+            })
+
+        assert response.status_code == 200
+        assert response.json()["summary"]["task_id"] == "task-123"
+        assert mock_queue.submit_reconciliation.called
     
-    def test_reconcile_missing_files_returns_404(self, client):
+    def test_reconcile_missing_files_returns_404(self, client, auth_headers):
         """Reconcile should return 404 when data files not found."""
-        with patch('core_logic.run_full_reconciliation_process', side_effect=FileNotFoundError("No files")):
-            response = client.post("/reconcile", json={
+        mock_queue = MagicMock()
+        mock_queue.submit_reconciliation.side_effect = FileNotFoundError("No files")
+        with patch('utils.task_queue.get_task_queue', return_value=mock_queue):
+            response = client.post("/reconcile", headers=auth_headers, json={
                 "date": "27.02.2026"
             })
             assert response.status_code == 404
     
-    def test_reconcile_invalid_request(self, client):
+    def test_reconcile_invalid_request(self, client, auth_headers):
         """Reconcile should return 422 for invalid request body."""
-        response = client.post("/reconcile", json={})  # Missing required 'date' field
+        response = client.post("/reconcile", headers=auth_headers, json={})  # Missing required 'date' field
         assert response.status_code == 422
+
+
+class TestUploadEndpoint:
+    """Tests for secure upload handling."""
+
+    pytestmark = pytest.mark.skipif(
+        not MULTIPART_AVAILABLE,
+        reason="python-multipart not installed. Run: pip install python-multipart",
+    )
+
+    def test_upload_requires_auth(self, client):
+        response = client.post(
+            "/files/upload",
+            files={"file": ("TON MOI.xlsx", b"PK\x03\x04test", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert response.status_code == 401
+
+    def test_upload_sanitizes_filename(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('config.INPUT_DIR', Path(tmpdir)):
+                response = client.post(
+                    "/files/upload",
+                    headers=auth_headers,
+                    files={"file": ("../evil.xlsx", b"PK\x03\x04test", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                )
+
+                assert response.status_code == 200
+                assert (Path(tmpdir) / "evil.xlsx").exists()
+                assert not (Path(tmpdir).parent / "evil.xlsx").exists()
+
+    def test_upload_rejects_overwrite(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            existing = Path(tmpdir) / "TON MOI.xlsx"
+            existing.write_bytes(b"PK\x03\x04existing")
+            with patch('config.INPUT_DIR', Path(tmpdir)):
+                response = client.post(
+                    "/files/upload",
+                    headers=auth_headers,
+                    files={"file": ("TON MOI.xlsx", b"PK\x03\x04new", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                )
+
+                assert response.status_code == 409
+                assert existing.read_bytes() == b"PK\x03\x04existing"
+
+    def test_upload_rejects_invalid_signature(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('config.INPUT_DIR', Path(tmpdir)):
+                response = client.post(
+                    "/files/upload",
+                    headers=auth_headers,
+                    files={"file": ("bad.xlsx", b"not an xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                )
+
+                assert response.status_code == 400
 
 
 class TestCORSConfiguration:
